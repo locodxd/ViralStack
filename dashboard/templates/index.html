@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Automation Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        h1 { color: #ff0050; margin-bottom: 20px; font-size: 24px; }
+        h2 { color: #00f2ea; margin-bottom: 12px; font-size: 18px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .card {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #2a2a4a;
+        }
+        .stat-value { font-size: 36px; font-weight: bold; color: #ff0050; }
+        .stat-label { font-size: 13px; color: #888; margin-top: 4px; }
+        .account-tag {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .tag-terror { background: #3d0a0a; color: #ff4444; }
+        .tag-historias { background: #0a2a3d; color: #44aaff; }
+        .tag-dinero { background: #0a3d0a; color: #44ff44; }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+        }
+        .status-published { background: #0a3d0a; color: #44ff44; }
+        .status-failed { background: #3d0a0a; color: #ff4444; }
+        .status-pending { background: #3d3d0a; color: #ffff44; }
+        .status-rejected { background: #3d1a0a; color: #ff8844; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid #2a2a4a;
+            font-size: 13px;
+        }
+        th { color: #888; font-weight: 600; }
+        tr:hover { background: #1e1e3e; }
+        .score { font-weight: bold; }
+        .score-good { color: #44ff44; }
+        .score-ok { color: #ffff44; }
+        .score-bad { color: #ff4444; }
+        .section { margin-bottom: 30px; }
+        .refresh-info { color: #555; font-size: 12px; text-align: right; margin-bottom: 10px; }
+        .key-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .key-active { background: #44ff44; }
+        .key-cooldown { background: #ffff44; }
+        .key-disabled { background: #ff4444; }
+        a { color: #00f2ea; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .email-category { text-transform: uppercase; font-size: 11px; font-weight: 600; }
+        .cat-sponsor { color: #44ff44; }
+        .cat-collab { color: #44aaff; }
+        .cat-legal { color: #ff4444; }
+        .cat-fan { color: #ff88ff; }
+        .cat-spam { color: #666; }
+    </style>
+</head>
+<body>
+    <h1>TikTok Automation Dashboard</h1>
+    <div class="refresh-info">Auto-refresh cada 60s | <span id="last-update"></span></div>
+
+    <!-- Stats Cards -->
+    <div class="grid" id="stats-grid"></div>
+
+    <!-- Account Stats -->
+    <div class="section">
+        <h2>Por Cuenta</h2>
+        <div class="grid" id="account-grid"></div>
+    </div>
+
+    <!-- Recent Videos -->
+    <div class="section">
+        <h2>Videos Recientes</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Cuenta</th>
+                        <th>Titulo</th>
+                        <th>Score</th>
+                        <th>Status</th>
+                        <th>Links</th>
+                        <th>Fecha</th>
+                    </tr>
+                </thead>
+                <tbody id="videos-table"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- API Keys Health -->
+    <div class="section">
+        <h2>API Keys</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Estado</th>
+                        <th>Provider</th>
+                        <th>Label</th>
+                        <th>Usos</th>
+                        <th>Chars</th>
+                        <th>Fallos</th>
+                        <th>Ultimo uso</th>
+                    </tr>
+                </thead>
+                <tbody id="keys-table"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Emails -->
+    <div class="section">
+        <h2>Emails Recientes</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>De</th>
+                        <th>Asunto</th>
+                        <th>Categoria</th>
+                        <th>Respondido</th>
+                        <th>Fecha</th>
+                    </tr>
+                </thead>
+                <tbody id="emails-table"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function formatDate(iso) {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            return d.toLocaleDateString('es') + ' ' + d.toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit'});
+        }
+
+        function scoreClass(score) {
+            if (score >= 7) return 'score-good';
+            if (score >= 5) return 'score-ok';
+            return 'score-bad';
+        }
+
+        function statusClass(status) {
+            if (status === 'published') return 'status-published';
+            if (status === 'failed') return 'status-failed';
+            if (status === 'rejected') return 'status-rejected';
+            return 'status-pending';
+        }
+
+        function accountTag(account) {
+            return `<span class="account-tag tag-${account}">${account}</span>`;
+        }
+
+        async function loadData() {
+            try {
+                const [statsRes, videosRes, keysRes, emailsRes] = await Promise.all([
+                    fetch('/api/stats'), fetch('/api/videos?limit=20'),
+                    fetch('/api/keys'), fetch('/api/emails?limit=20')
+                ]);
+
+                const stats = await statsRes.json();
+                const videos = await videosRes.json();
+                const keys = await keysRes.json();
+                const emails = await emailsRes.json();
+
+                // Stats cards
+                document.getElementById('stats-grid').innerHTML = `
+                    <div class="card"><div class="stat-value">${stats.published}</div><div class="stat-label">Videos Publicados</div></div>
+                    <div class="card"><div class="stat-value">${stats.today}</div><div class="stat-label">Videos Hoy</div></div>
+                    <div class="card"><div class="stat-value">${stats.avg_quality_score}</div><div class="stat-label">Score Promedio</div></div>
+                    <div class="card"><div class="stat-value">${stats.failure_rate}%</div><div class="stat-label">Tasa de Error</div></div>
+                `;
+
+                // Account stats
+                let accountHtml = '';
+                for (const [acc, data] of Object.entries(stats.accounts || {})) {
+                    accountHtml += `<div class="card">
+                        ${accountTag(acc)}
+                        <div class="stat-value" style="margin-top:10px">${data.published_total}</div>
+                        <div class="stat-label">Publicados (${data.today} hoy)</div>
+                    </div>`;
+                }
+                document.getElementById('account-grid').innerHTML = accountHtml;
+
+                // Videos table
+                document.getElementById('videos-table').innerHTML = videos.map(v => `
+                    <tr>
+                        <td>${v.id}</td>
+                        <td>${accountTag(v.account)}</td>
+                        <td>${(v.title || '-').substring(0, 40)}</td>
+                        <td class="score ${scoreClass(v.quality_score)}">${v.quality_score ? v.quality_score.toFixed(1) : '-'}</td>
+                        <td><span class="status-badge ${statusClass(v.status)}">${v.status}</span></td>
+                        <td>
+                            ${v.drive_url ? `<a href="${v.drive_url}" target="_blank">Drive</a>` : ''}
+                            ${v.tiktok_url ? ` | <a href="${v.tiktok_url}" target="_blank">TikTok</a>` : ''}
+                        </td>
+                        <td>${formatDate(v.created_at)}</td>
+                    </tr>
+                `).join('');
+
+                // Keys table
+                document.getElementById('keys-table').innerHTML = keys.map(k => `
+                    <tr>
+                        <td><span class="key-status ${k.in_cooldown ? 'key-cooldown' : (k.enabled ? 'key-active' : 'key-disabled')}"></span></td>
+                        <td>${k.provider}</td>
+                        <td>${k.label || '-'}</td>
+                        <td>${k.usage_count}</td>
+                        <td>${k.usage_chars || '-'}</td>
+                        <td>${k.failure_count}</td>
+                        <td>${formatDate(k.last_used)}</td>
+                    </tr>
+                `).join('');
+
+                // Emails table
+                document.getElementById('emails-table').innerHTML = emails.map(e => `
+                    <tr>
+                        <td>${(e.sender || '').substring(0, 30)}</td>
+                        <td>${(e.subject || '').substring(0, 40)}</td>
+                        <td><span class="email-category cat-${e.category}">${e.category}</span></td>
+                        <td>${e.auto_responded ? 'Si' : (e.needs_attention ? '<strong style="color:#ff4444">ATENCION</strong>' : 'No')}</td>
+                        <td>${formatDate(e.created_at)}</td>
+                    </tr>
+                `).join('');
+
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString('es');
+            } catch (err) {
+                console.error('Dashboard load error:', err);
+            }
+        }
+
+        loadData();
+        setInterval(loadData, 60000);
+    </script>
+</body>
+</html>

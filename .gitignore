@@ -1,0 +1,72 @@
+# ============================================================
+# Secrets & Credentials — NEVER commit these
+# ============================================================
+.env
+service_account.json
+config/service_account.json
+config/gmail_credentials.json
+config/gmail_token.json
+config/*_token.json
+
+# ============================================================
+# Storage — generated content, not part of the project
+# ============================================================
+storage/*.db
+storage/*.db-journal
+storage/output/**
+storage/cookies/**
+storage/image_cache/**
+!storage/output/.gitkeep
+!storage/output/dinero/.gitkeep
+!storage/output/historias/.gitkeep
+!storage/output/terror/.gitkeep
+!storage/cookies/.gitkeep
+!storage/image_cache/.gitkeep
+
+# ============================================================
+# Logs
+# ============================================================
+*.log
+logs/
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+dist/
+build/
+
+# ============================================================
+# Tools (downloaded binaries)
+# ============================================================
+tools/
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# IDE
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ============================================================
+# Testing
+# ============================================================
+.pytest_cache/
+htmlcov/
+.coverage

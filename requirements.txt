@@ -1,0 +1,51 @@
+# Gemini AI
+google-genai>=1.0.0
+
+# Video Generation
+httpx>=0.27.0
+
+# TTS
+edge-tts>=6.1.0
+elevenlabs>=1.0.0
+
+# Subtitles
+faster-whisper>=1.0.0
+
+# Video Processing
+ffmpeg-python>=0.2.0
+
+# Google APIs (Drive + Gmail)
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
+# TikTok Upload
+tiktok-uploader>=0.2.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Web Dashboard
+fastapi>=0.110.0
+uvicorn>=0.27.0
+jinja2>=3.1.0
+
+# Discord Bot + Alerts
+discord.py>=2.3.0
+discord-webhook>=1.3.0
+
+# Config
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Utilities
+aiohttp>=3.9.0
+aiofiles>=23.2.0
