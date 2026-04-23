@@ -7,6 +7,7 @@ from google.genai import types
 from core.key_rotation import gemini_rotator
 from core.db import get_session
 from core.models import IdeaHistory
+from core import llm_providers
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -694,13 +695,33 @@ async def generate_script(account: str) -> dict:
         )
 
     def _generate_once(prompt_text: str, temperature: float) -> tuple[dict, str, str]:
-        response, model_used = gemini_rotator.call(
-            lambda client, model_name: build_request(
-                client, model_name, prompt_text, temperature
-            ),
-            preferred_models=["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.1-pro-preview"],
-        )
-        raw_text = response.text or ""
+        """Generate one script via the multi-LLM chain.
+
+        First provider in `settings.script_provider_chain` wins; on failure
+        we transparently fall through to the next provider (OpenAI, Claude,
+        OpenRouter, Groq, ...). Gemini stays the default at the front of the
+        chain so existing setups behave identically.
+        """
+        try:
+            result = llm_providers.generate_text(
+                prompt_text,
+                system=system_prompt,
+                temperature=temperature,
+                max_tokens=_SCRIPT_MAX_OUTPUT_TOKENS,
+            )
+            raw_text = result.text or ""
+            model_used = f"{result.provider}:{result.model}"
+        except Exception as exc:
+            # Hard fall-back to legacy direct rotator path if the abstraction
+            # blew up — keeps the system alive even if a provider import fails.
+            logger.warning("Multi-LLM chain failed (%s) — falling back to gemini_rotator.", exc)
+            response, model_used = gemini_rotator.call(
+                lambda client, model_name: build_request(
+                    client, model_name, prompt_text, temperature
+                ),
+                preferred_models=settings.gemini_models_list or None,
+            )
+            raw_text = response.text or ""
         logger.info("Script generated for %s using %s: %d chars", account, model_used, len(raw_text))
 
         parsed_local = _parse_script_response(raw_text)

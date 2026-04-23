@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium-driver \
     fonts-liberation \
     fonts-dejavu-core \
+    curl \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright chromium (for tiktok-uploader)
@@ -29,5 +31,10 @@ RUN mkdir -p storage/cookies storage/output/terror storage/output/historias stor
 # Expose dashboard
 EXPOSE 8000
 
-# Run
+# Healthcheck — uses public /health endpoint (no auth required)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health >/dev/null || exit 1
+
+# Use tini as PID 1 for proper signal handling
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "main.py"]

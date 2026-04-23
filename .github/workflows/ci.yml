@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install ffmpeg (system)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff pytest pytest-asyncio
+
+      - name: Lint (ruff)
+        run: ruff check . --select E9,F63,F7,F82 --target-version py311
+
+      - name: Smoke import
+        env:
+          GEMINI_API_KEYS: "test-key-not-real"
+          DISCORD_BOT_TOKEN: ""
+        run: |
+          python -c "import config.settings; import core.llm_providers; import core.health; import core.backup; import core.audit; print('OK')"
+
+      - name: Run tests
+        env:
+          GEMINI_API_KEYS: "test-key-not-real"
+        run: pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: viralstack:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

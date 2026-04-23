@@ -1,13 +1,20 @@
 """
 Slash commands for the automation Discord bot.
 
-Commands:
-- /status — System status overview
-- /publish <account> [platform] — Force manual video publication
-- /toggle <account> <platform> — Enable/disable platform for account
-- /config — View current configuration
-- /schedule — View upcoming scheduled videos
-- /emails [account] — View recent email activity
+v1.1 commands:
+- /status               System status overview
+- /publish              Force manual video production
+- /toggle               Enable/disable platform per account
+- /config               View current configuration
+- /schedule             View upcoming scheduled videos
+- /emails               Recent email activity
+- /retry video_id       Retry a specific video by id
+- /pause account        Disable BOTH platforms for an account
+- /resume account       Enable BOTH platforms for an account
+- /backup               Trigger an immediate DB backup
+- /blackout add/list/clear  Manage blackout dates
+- /health               System health check
+- /version              Show ViralStack version
 """
 import logging
 import asyncio
@@ -17,17 +24,23 @@ import discord
 from discord import app_commands
 from config.settings import (
     settings, ACCOUNTS, load_platform_config, toggle_platform, is_platform_enabled,
+    list_account_ids, load_blackout_dates, save_blackout_dates,
 )
 from core.db import get_session
 from core.models import Video, EmailThread
+from core import audit
 
 logger = logging.getLogger(__name__)
 
-ACCOUNT_CHOICES = [
-    app_commands.Choice(name="Terror", value="terror"),
-    app_commands.Choice(name="Historias", value="historias"),
-    app_commands.Choice(name="Dinero", value="dinero"),
-]
+
+def _account_choices() -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=ACCOUNTS.get(a, {}).get("display_name", a), value=a)
+        for a in list_account_ids()
+    ][:25]
+
+
+ACCOUNT_CHOICES = _account_choices()
 
 PLATFORM_CHOICES = [
     app_commands.Choice(name="TikTok", value="tiktok"),
@@ -57,7 +70,7 @@ def setup_commands(bot):
 
             # Per-account counts
             account_lines = []
-            for acc_name in ["terror", "historias", "dinero"]:
+            for acc_name in list_account_ids():
                 acc_pub = session.query(Video).filter(
                     Video.account == acc_name, Video.status == "published"
                 ).count()
@@ -217,7 +230,7 @@ def setup_commands(bot):
         )
 
         # Platform toggles
-        for acc_name in ["terror", "historias", "dinero"]:
+        for acc_name in list_account_ids():
             display = ACCOUNTS.get(acc_name, {}).get("display_name", acc_name)
             vpd = ACCOUNTS.get(acc_name, {}).get("videos_per_day", 0)
             tt = "ON" if config.get(acc_name, {}).get("tiktok") else "OFF"
@@ -259,7 +272,7 @@ def setup_commands(bot):
             timestamp=datetime.utcnow(),
         )
 
-        for acc_name in ["terror", "historias", "dinero"]:
+        for acc_name in list_account_ids():
             acc_cfg = ACCOUNTS.get(acc_name, {})
             display = acc_cfg.get("display_name", acc_name)
             vpd = acc_cfg.get("videos_per_day", 0)
@@ -340,3 +353,130 @@ def setup_commands(bot):
                 )
 
         await interaction.followup.send(embed=embed)
+
+    # ------------------------------------------------------------------
+    # v1.1 commands
+    # ------------------------------------------------------------------
+
+    @bot.tree.command(name="retry", description="Re-encolar la producción de un video por id")
+    @app_commands.describe(video_id="ID del video a reintentar")
+    @owner_only()
+    async def retry_cmd(interaction: discord.Interaction, video_id: int):
+        await interaction.response.defer(ephemeral=True)
+        with get_session() as session:
+            v = session.query(Video).filter_by(id=video_id).first()
+            if not v:
+                await interaction.followup.send(f"Video {video_id} no encontrado.")
+                return
+            account = v.account
+
+        from pipeline.orchestrator import produce_video
+        asyncio.create_task(produce_video(account))
+        audit.record("video_retry", actor=str(interaction.user.id),
+                     target=str(video_id), details={"account": account})
+        await interaction.followup.send(f"Reintentando video {video_id} (cuenta: {account}).")
+
+    @bot.tree.command(name="pause", description="Deshabilitar AMBAS plataformas de una cuenta")
+    @app_commands.describe(account="Cuenta a pausar")
+    @app_commands.choices(account=ACCOUNT_CHOICES)
+    @owner_only()
+    async def pause_cmd(interaction: discord.Interaction,
+                        account: app_commands.Choice[str]):
+        toggle_platform(account.value, "tiktok", False)
+        toggle_platform(account.value, "youtube", False)
+        audit.record("account_pause", actor=str(interaction.user.id), target=account.value)
+        await interaction.response.send_message(
+            f"Cuenta **{account.name}** pausada (TikTok+YouTube OFF).", ephemeral=True
+        )
+
+    @bot.tree.command(name="resume", description="Habilitar AMBAS plataformas de una cuenta")
+    @app_commands.describe(account="Cuenta a reanudar")
+    @app_commands.choices(account=ACCOUNT_CHOICES)
+    @owner_only()
+    async def resume_cmd(interaction: discord.Interaction,
+                         account: app_commands.Choice[str]):
+        toggle_platform(account.value, "tiktok", True)
+        toggle_platform(account.value, "youtube", True)
+        audit.record("account_resume", actor=str(interaction.user.id), target=account.value)
+        await interaction.response.send_message(
+            f"Cuenta **{account.name}** reanudada (TikTok+YouTube ON).", ephemeral=True
+        )
+
+    @bot.tree.command(name="backup", description="Crear un backup inmediato de la base de datos")
+    @owner_only()
+    async def backup_cmd(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        from core.backup import backup_database
+        path = backup_database()
+        if not path:
+            await interaction.followup.send("Backup falló. Revisa los logs.")
+            return
+        audit.record("backup", actor=str(interaction.user.id), target=str(path))
+        await interaction.followup.send(f"Backup creado: `{path}`")
+
+    @bot.tree.command(name="blackout", description="Gestionar fechas en las que NO se produce")
+    @app_commands.describe(action="add | list | clear", date="Fecha YYYY-MM-DD (para add)")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="add", value="add"),
+        app_commands.Choice(name="list", value="list"),
+        app_commands.Choice(name="clear", value="clear"),
+    ])
+    @owner_only()
+    async def blackout_cmd(interaction: discord.Interaction,
+                           action: app_commands.Choice[str],
+                           date: Optional[str] = None):
+        if action.value == "list":
+            dates = load_blackout_dates()
+            msg = "Sin fechas de blackout." if not dates else "\n".join(f"• {d}" for d in dates)
+            await interaction.response.send_message(msg, ephemeral=True)
+            return
+        if action.value == "clear":
+            save_blackout_dates([])
+            audit.record("blackout_clear", actor=str(interaction.user.id))
+            await interaction.response.send_message("Blackout dates eliminadas.", ephemeral=True)
+            return
+        # add
+        if not date:
+            await interaction.response.send_message("Falta el parámetro `date` (YYYY-MM-DD).",
+                                                    ephemeral=True)
+            return
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            await interaction.response.send_message("Formato inválido. Usa YYYY-MM-DD.",
+                                                    ephemeral=True)
+            return
+        dates = load_blackout_dates()
+        if date not in dates:
+            dates.append(date)
+            save_blackout_dates(dates)
+        audit.record("blackout_add", actor=str(interaction.user.id), target=date)
+        await interaction.response.send_message(f"Blackout añadido: {date}", ephemeral=True)
+
+    @bot.tree.command(name="health", description="Estado de salud del sistema")
+    @owner_only()
+    async def health_cmd(interaction: discord.Interaction):
+        from core.health import health_snapshot
+        snap = health_snapshot()
+        color = discord.Color.green() if snap["ok"] else discord.Color.red()
+        embed = discord.Embed(
+            title=f"Salud — ViralStack v{snap.get('version', '?')}",
+            color=color,
+            timestamp=datetime.utcnow(),
+        )
+        for name, check in snap.get("checks", {}).items():
+            status = "OK" if check.get("ok") else "FAIL"
+            embed.add_field(
+                name=f"{name}: {status}",
+                value=check.get("detail", "-")[:1000],
+                inline=False,
+            )
+        embed.set_footer(text=f"Uptime: {snap.get('uptime_seconds', 0)}s")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="version", description="Versión de ViralStack")
+    async def version_cmd(interaction: discord.Interaction):
+        await interaction.response.send_message(
+            f"**ViralStack v{settings.version}** — {len(list_account_ids())} cuentas registradas.",
+            ephemeral=True,
+        )

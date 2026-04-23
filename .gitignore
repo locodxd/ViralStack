@@ -2,20 +2,35 @@
 # Secrets & Credentials — NEVER commit these
 # ============================================================
 .env
+.env.*
+!.env.example
 service_account.json
 config/service_account.json
 config/gmail_credentials.json
 config/gmail_token.json
 config/*_token.json
+config/accounts.json
+config/blackout_dates.json
+config/platforms.json
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.secrets/
 
 # ============================================================
 # Storage — generated content, not part of the project
 # ============================================================
 storage/*.db
 storage/*.db-journal
+storage/*.db-wal
+storage/*.db-shm
+storage/backups/**
 storage/output/**
 storage/cookies/**
 storage/image_cache/**
+storage/model_probe/**
 !storage/output/.gitkeep
 !storage/output/dinero/.gitkeep
 !storage/output/historias/.gitkeep
@@ -48,6 +63,15 @@ build/
 # Tools (downloaded binaries)
 # ============================================================
 tools/
+
+# ============================================================
+# Royalty-free music — too heavy + license-restricted
+# ============================================================
+music/royalty_free/**/*.mp3
+music/royalty_free/**/*.wav
+music/royalty_free/**/*.m4a
+music/royalty_free/**/_temp_*
+!music/royalty_free/**/.gitkeep
 
 # ============================================================
 # OS

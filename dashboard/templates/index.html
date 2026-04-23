@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok Automation Dashboard</title>
+    <title>ViralStack Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -29,6 +29,8 @@
             border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
+            background: #333;
+            color: #ccc;
         }
         .tag-terror { background: #3d0a0a; color: #ff4444; }
         .tag-historias { background: #0a2a3d; color: #44aaff; }
@@ -43,17 +45,8 @@
         .status-failed { background: #3d0a0a; color: #ff4444; }
         .status-pending { background: #3d3d0a; color: #ffff44; }
         .status-rejected { background: #3d1a0a; color: #ff8844; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-        th, td {
-            padding: 10px 12px;
-            text-align: left;
-            border-bottom: 1px solid #2a2a4a;
-            font-size: 13px;
-        }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a2a4a; font-size: 13px; }
         th { color: #888; font-weight: 600; }
         tr:hover { background: #1e1e3e; }
         .score { font-weight: bold; }
@@ -74,117 +67,274 @@
         .cat-legal { color: #ff4444; }
         .cat-fan { color: #ff88ff; }
         .cat-spam { color: #666; }
+        /* Tabs */
+        .tabs { display: flex; gap: 4px; border-bottom: 1px solid #2a2a4a; margin-bottom: 20px; flex-wrap: wrap; }
+        .tab-btn {
+            padding: 10px 18px; background: transparent; color: #888; border: none;
+            border-bottom: 2px solid transparent; cursor: pointer; font-size: 14px;
+            font-weight: 600;
+        }
+        .tab-btn:hover { color: #e0e0e0; }
+        .tab-btn.active { color: #00f2ea; border-bottom-color: #00f2ea; }
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+        /* Provider chip */
+        .provider-chip {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 10px; border-radius: 16px; font-size: 12px;
+            margin: 2px; background: #222;
+        }
+        .provider-chip.ok { background: #0a3d0a; color: #44ff44; }
+        .provider-chip.off { background: #2a1a1a; color: #888; }
+        .chain-position { background: #00f2ea; color: #000; border-radius: 50%; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; }
+        /* Bar chart */
+        .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+        .bar-row .label { width: 90px; color: #888; }
+        .bar-row .bar { height: 14px; background: #00f2ea; border-radius: 2px; min-width: 2px; }
+        /* Buttons */
+        .btn { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .btn-primary { background: #447; color: #fff; }
+        .btn-success { background: #474; color: #fff; }
+        .btn-danger { background: #744; color: #fff; }
+        .btn:hover { filter: brightness(1.2); }
+        @media (max-width: 600px) {
+            body { padding: 10px; }
+            th, td { padding: 6px; font-size: 11px; }
+        }
     </style>
 </head>
 <body>
-    <h1>TikTok Automation Dashboard</h1>
-    <div class="refresh-info">Auto-refresh cada 60s | <span id="last-update"></span></div>
-
-    <!-- Stats Cards -->
-    <div class="grid" id="stats-grid"></div>
-
-    <!-- Account Stats -->
-    <div class="section">
-        <h2>Por Cuenta</h2>
-        <div class="grid" id="account-grid"></div>
+    <h1>ViralStack Dashboard <span id="version-tag" style="font-size:14px;color:#888"></span></h1>
+    <div class="refresh-info">
+        Auto-refresh cada 60s | <span id="last-update"></span>
+        | <span id="health-pill" style="padding:2px 8px;border-radius:4px;background:#444">health: ?</span>
     </div>
 
-    <!-- Recent Videos -->
-    <div class="section">
-        <h2>Videos Recientes</h2>
-        <div class="card">
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Cuenta</th>
-                        <th>Titulo</th>
-                        <th>Score</th>
-                        <th>Status</th>
-                        <th>Links</th>
-                        <th>Fecha</th>
-                    </tr>
-                </thead>
-                <tbody id="videos-table"></tbody>
-            </table>
+    <!-- API key -->
+    <div class="section" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label for="api-key-input" style="font-weight:bold">API Key:</label>
+        <input id="api-key-input" type="password" placeholder="(opcional, vacÃ­o si no la activaste)"
+               style="flex:1;min-width:200px;padding:6px;background:#222;color:#eee;border:1px solid #444;border-radius:4px"/>
+        <button id="api-key-save" class="btn btn-primary">Guardar</button>
+        <button id="reload-btn" class="btn btn-success">Recargar</button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="overview">Overview</button>
+        <button class="tab-btn" data-tab="videos">Videos</button>
+        <button class="tab-btn" data-tab="providers">LLM Providers</button>
+        <button class="tab-btn" data-tab="keys">API Keys</button>
+        <button class="tab-btn" data-tab="emails">Emails</button>
+        <button class="tab-btn" data-tab="analytics">Analytics</button>
+        <button class="tab-btn" data-tab="audit">Audit</button>
+    </div>
+
+    <!-- Overview tab -->
+    <div class="tab-pane active" data-pane="overview">
+        <div class="grid" id="stats-grid"></div>
+        <div class="section">
+            <h2>Por Cuenta</h2>
+            <div class="grid" id="account-grid"></div>
         </div>
     </div>
 
-    <!-- API Keys Health -->
-    <div class="section">
-        <h2>API Keys</h2>
-        <div class="card">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Estado</th>
-                        <th>Provider</th>
-                        <th>Label</th>
-                        <th>Usos</th>
-                        <th>Chars</th>
-                        <th>Fallos</th>
-                        <th>Ultimo uso</th>
-                    </tr>
-                </thead>
-                <tbody id="keys-table"></tbody>
-            </table>
+    <!-- Videos tab -->
+    <div class="tab-pane" data-pane="videos">
+        <div class="section">
+            <h2>Videos Recientes</h2>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th><th>Cuenta</th><th>Titulo</th><th>Score</th>
+                            <th>Status</th><th>Links</th><th>Fecha</th><th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="videos-table"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 
-    <!-- Emails -->
-    <div class="section">
-        <h2>Emails Recientes</h2>
-        <div class="card">
-            <table>
-                <thead>
-                    <tr>
-                        <th>De</th>
-                        <th>Asunto</th>
-                        <th>Categoria</th>
-                        <th>Respondido</th>
-                        <th>Fecha</th>
-                    </tr>
-                </thead>
-                <tbody id="emails-table"></tbody>
-            </table>
+    <!-- LLM Providers tab -->
+    <div class="tab-pane" data-pane="providers">
+        <div class="section">
+            <h2>Cadena de proveedores LLM</h2>
+            <div class="card">
+                <p style="color:#888;font-size:13px;margin-bottom:10px">
+                    Los scripts se generan probando estos proveedores en orden.
+                    El primero disponible que devuelva un script vÃ¡lido gana.
+                </p>
+                <div id="providers-chain" style="margin-bottom:14px"></div>
+                <div id="providers-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- API Keys tab -->
+    <div class="tab-pane" data-pane="keys">
+        <div class="section">
+            <h2>API Keys</h2>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Estado</th><th>Provider</th><th>Label</th>
+                            <th>Usos</th><th>Chars</th><th>Fallos</th><th>Ultimo uso</th>
+                        </tr>
+                    </thead>
+                    <tbody id="keys-table"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Emails tab -->
+    <div class="tab-pane" data-pane="emails">
+        <div class="section">
+            <h2>Emails Recientes</h2>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr><th>De</th><th>Asunto</th><th>Categoria</th><th>Respondido</th><th>Fecha</th></tr>
+                    </thead>
+                    <tbody id="emails-table"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analytics tab -->
+    <div class="tab-pane" data-pane="analytics">
+        <div class="section">
+            <h2>Videos publicados â€” Ãºltimos 30 dÃ­as</h2>
+            <div class="card" id="analytics-chart"></div>
+        </div>
+    </div>
+
+    <!-- Audit tab -->
+    <div class="tab-pane" data-pane="audit">
+        <div class="section">
+            <h2>Audit Log</h2>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr><th>Fecha</th><th>Actor</th><th>Action</th><th>Target</th></tr>
+                    </thead>
+                    <tbody id="audit-table"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 
     <script>
+        // ----- Tabs -----
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+                    btn.classList.add('active');
+                    document.querySelector(`.tab-pane[data-pane="${btn.dataset.tab}"]`).classList.add('active');
+                });
+            });
+        });
+
+        // ----- API key handling -----
+        const API_KEY_STORAGE = 'viralstack_api_key';
+        function getApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ''; }
+        function setApiKey(v) { localStorage.setItem(API_KEY_STORAGE, v || ''); }
+        function authFetch(url, opts={}) {
+            const headers = Object.assign({}, opts.headers || {});
+            const key = getApiKey();
+            if (key) headers['X-API-Key'] = key;
+            return fetch(url, Object.assign({}, opts, { headers }));
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('api-key-input').value = getApiKey();
+            document.getElementById('api-key-save').addEventListener('click', () => {
+                setApiKey(document.getElementById('api-key-input').value.trim());
+                loadData();
+            });
+            document.getElementById('reload-btn').addEventListener('click', loadData);
+        });
+
+        // ----- Helpers -----
         function formatDate(iso) {
             if (!iso) return '-';
             const d = new Date(iso);
             return d.toLocaleDateString('es') + ' ' + d.toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit'});
         }
-
         function scoreClass(score) {
             if (score >= 7) return 'score-good';
             if (score >= 5) return 'score-ok';
             return 'score-bad';
         }
-
         function statusClass(status) {
             if (status === 'published') return 'status-published';
             if (status === 'failed') return 'status-failed';
             if (status === 'rejected') return 'status-rejected';
             return 'status-pending';
         }
-
         function accountTag(account) {
             return `<span class="account-tag tag-${account}">${account}</span>`;
         }
 
+        // ----- Actions -----
+        async function retryVideo(id) {
+            if (!confirm(`¿Reintentar la producción del video ${id}?`)) return;
+            const r = await authFetch(`/api/videos/${id}/retry`, { method: 'POST' });
+            const data = await r.json().catch(() => ({}));
+            alert(r.ok ? `Encolado para ${data.account}.` : `Error: ${JSON.stringify(data)}`);
+            loadData();
+        }
+        async function deleteVideo(id) {
+            if (!confirm(`¿Eliminar el video ${id}? (no borra archivos)`)) return;
+            const r = await authFetch(`/api/videos/${id}`, { method: 'DELETE' });
+            alert(r.ok ? 'Eliminado.' : 'Error al eliminar.');
+            loadData();
+        }
+        window.retryVideo = retryVideo;
+        window.deleteVideo = deleteVideo;
+
+        // ----- Main loader -----
         async function loadData() {
             try {
-                const [statsRes, videosRes, keysRes, emailsRes] = await Promise.all([
-                    fetch('/api/stats'), fetch('/api/videos?limit=20'),
-                    fetch('/api/keys'), fetch('/api/emails?limit=20')
+                const [versionRes, healthRes, statsRes, videosRes, keysRes, emailsRes,
+                       auditRes, providersRes, tsRes] = await Promise.all([
+                    authFetch('/version'),
+                    authFetch('/health'),
+                    authFetch('/api/stats'),
+                    authFetch('/api/videos?limit=30'),
+                    authFetch('/api/keys'),
+                    authFetch('/api/emails?limit=20'),
+                    authFetch('/api/audit?limit=40'),
+                    authFetch('/api/llm/providers'),
+                    authFetch('/api/analytics/timeseries?days=30'),
                 ]);
 
+                if (statsRes.status === 401 || statsRes.status === 403) {
+                    document.getElementById('health-pill').textContent = 'auth: requerida';
+                    document.getElementById('health-pill').style.background = '#a33';
+                    return;
+                }
+
+                const ver = await versionRes.json().catch(() => ({}));
+                const health = await healthRes.json().catch(() => ({}));
                 const stats = await statsRes.json();
-                const videos = await videosRes.json();
+                const videosResp = await videosRes.json();
+                const videos = Array.isArray(videosResp) ? videosResp : (videosResp.items || []);
                 const keys = await keysRes.json();
                 const emails = await emailsRes.json();
+                const auditRows = await auditRes.json().catch(() => []);
+                const providers = await providersRes.json().catch(() => ({ providers: [], chain: [] }));
+                const ts = await tsRes.json().catch(() => ({ series: {}, accounts: [] }));
+
+                document.getElementById('version-tag').textContent = ver.version ? `v${ver.version}` : '';
+                const pill = document.getElementById('health-pill');
+                pill.textContent = `health: ${health.ok ? 'OK' : 'FAIL'}`;
+                pill.style.background = health.ok ? '#272' : '#a33';
 
                 // Stats cards
                 document.getElementById('stats-grid').innerHTML = `
@@ -200,10 +350,10 @@
                     accountHtml += `<div class="card">
                         ${accountTag(acc)}
                         <div class="stat-value" style="margin-top:10px">${data.published_total}</div>
-                        <div class="stat-label">Publicados (${data.today} hoy)</div>
+                        <div class="stat-label">Publicados (${data.today} hoy) — TT:${data.tiktok} | YT:${data.youtube}</div>
                     </div>`;
                 }
-                document.getElementById('account-grid').innerHTML = accountHtml;
+                document.getElementById('account-grid').innerHTML = accountHtml || '<p style="color:#888">Sin cuentas registradas.</p>';
 
                 // Videos table
                 document.getElementById('videos-table').innerHTML = videos.map(v => `
@@ -215,9 +365,14 @@
                         <td><span class="status-badge ${statusClass(v.status)}">${v.status}</span></td>
                         <td>
                             ${v.drive_url ? `<a href="${v.drive_url}" target="_blank">Drive</a>` : ''}
-                            ${v.tiktok_url ? ` | <a href="${v.tiktok_url}" target="_blank">TikTok</a>` : ''}
+                            ${v.tiktok_url ? ` | <a href="${v.tiktok_url}" target="_blank">TT</a>` : ''}
+                            ${v.youtube_url ? ` | <a href="${v.youtube_url}" target="_blank">YT</a>` : ''}
                         </td>
                         <td>${formatDate(v.created_at)}</td>
+                        <td>
+                            <button class="btn btn-primary" onclick="retryVideo(${v.id})">↻</button>
+                            <button class="btn btn-danger" onclick="deleteVideo(${v.id})">✕</button>
+                        </td>
                     </tr>
                 `).join('');
 
@@ -240,10 +395,59 @@
                         <td>${(e.sender || '').substring(0, 30)}</td>
                         <td>${(e.subject || '').substring(0, 40)}</td>
                         <td><span class="email-category cat-${e.category}">${e.category}</span></td>
-                        <td>${e.auto_responded ? 'Si' : (e.needs_attention ? '<strong style="color:#ff4444">ATENCION</strong>' : 'No')}</td>
+                        <td>${e.auto_responded ? 'Sí' : (e.needs_attention ? '<strong style="color:#ff4444">ATENCIÓN</strong>' : 'No')}</td>
                         <td>${formatDate(e.created_at)}</td>
                     </tr>
                 `).join('');
+
+                // Audit table
+                document.getElementById('audit-table').innerHTML = (auditRows || []).map(a => `
+                    <tr>
+                        <td>${formatDate(a.created_at)}</td>
+                        <td>${a.actor || '-'}</td>
+                        <td><strong>${a.action}</strong></td>
+                        <td>${a.target || ''}</td>
+                    </tr>
+                `).join('');
+
+                // LLM Providers
+                const chainHtml = (providers.chain || []).map((n, i) =>
+                    `<span class="provider-chip ok"><span class="chain-position">${i+1}</span>${n}</span>`
+                ).join(' → ') || '<em style="color:#888">Cadena vacía</em>';
+                document.getElementById('providers-chain').innerHTML =
+                    `<strong>Orden de fallback:</strong><br>${chainHtml}`;
+
+                document.getElementById('providers-list').innerHTML = (providers.providers || []).map(p => `
+                    <div style="margin:10px 0;padding:10px;background:#222;border-radius:6px">
+                        <span class="provider-chip ${p.available ? 'ok' : 'off'}">
+                            ${p.available ? '✓' : '✗'} <strong>${p.name}</strong>
+                            ${p.in_chain ? `<span class="chain-position">${p.chain_position}</span>` : ''}
+                        </span>
+                        <div style="margin-top:6px;color:#888;font-size:12px">
+                            Modelos: ${(p.models || []).join(', ') || '(ninguno)'}
+                        </div>
+                    </div>
+                `).join('');
+
+                // Analytics chart (per-account daily totals, last 30 days)
+                const series = ts.series || {};
+                const days = Object.keys(series).sort();
+                const accs = ts.accounts || [];
+                const totals = {};
+                accs.forEach(a => totals[a] = 0);
+                days.forEach(d => accs.forEach(a => {
+                    totals[a] += (series[d][a] && series[d][a].published) || 0;
+                }));
+                const maxTotal = Math.max(1, ...Object.values(totals));
+                document.getElementById('analytics-chart').innerHTML = accs.map(a => {
+                    const v = totals[a] || 0;
+                    const pct = (v / maxTotal) * 100;
+                    return `<div class="bar-row">
+                        <span class="label">${a}</span>
+                        <div class="bar" style="width:${pct}%"></div>
+                        <span style="color:#aaa">${v}</span>
+                    </div>`;
+                }).join('') || '<p style="color:#888">Sin datos.</p>';
 
                 document.getElementById('last-update').textContent = new Date().toLocaleTimeString('es');
             } catch (err) {

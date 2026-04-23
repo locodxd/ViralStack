@@ -55,7 +55,7 @@ class AutomationBot(discord.Client):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="ViralStack",
+                name=settings.discord_status_message or f"ViralStack v{settings.version}",
             )
         )
 

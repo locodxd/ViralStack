@@ -1,10 +1,37 @@
 # ViralStack
 
+> **v1.1** — see [CHANGELOG.md](CHANGELOG.md) for the full changelog. Highlights: **multi-LLM script generation** (Gemini · OpenAI · Claude · OpenRouter · Groq · DeepSeek · Together · Mistral · Ollama), tabbed dashboard with `/api/llm/providers` health view, dynamic accounts via `config/accounts.json`, optional API-key auth, multi-channel notifications (Slack/Telegram/webhook), automatic SQLite backups, audit log, hard pipeline timeouts, per-account quality thresholds, blackout dates, weekend skip, `/health` endpoint, ~60 new env-tunable settings, GitHub-ready (CI, issue/PR templates, SECURITY/CONTRIBUTING/COC), and many bug fixes.
+
 An open-source AI-powered system that automates the creation and publishing of short-form content for TikTok and YouTube. From idea generation to video production and upload — fully autonomous, scalable, and customizable.
 
-The system manages **3 independent accounts** (or as many as you configure), generates scripts with Google Gemini, creates images with Imagen 4.0, narrates with TTS, adds subtitles, composes the final video, and publishes to both platforms simultaneously.
+The system manages **3 independent accounts** (or as many as you configure), generates scripts with the LLM provider of your choice, creates images with Imagen 4.0, narrates with TTS, adds subtitles, composes the final video, and publishes to both platforms simultaneously.
 
 ---
+
+## 🤖 Multi-LLM Script Generation (NEW in v1.1)
+
+Configure a **fallback chain** in `.env` and ViralStack will try each provider in order until one returns a valid script:
+
+```env
+SCRIPT_PROVIDER_CHAIN=gemini,openai,anthropic,openrouter,groq
+```
+
+| Provider | Free tier | Speed | Quality | Setup |
+|---|---|---|---|---|
+| **gemini** | ✅ | medium | high | `VERTEX_AI_API_KEY` o `GEMINI_API_KEYS` |
+| **openai** | ❌ | medium | very high | `OPENAI_API_KEYS` |
+| **anthropic** | ❌ | medium | very high | `ANTHROPIC_API_KEYS` |
+| **openrouter** | partial | varies | varies | `OPENROUTER_API_KEYS` (acceso a 100+ modelos) |
+| **groq** | ✅ | ⚡ very fast | high | `GROQ_API_KEYS` |
+| **deepseek** | ❌ | medium | high | `DEEPSEEK_API_KEYS` |
+| **together** | partial | medium | high | `TOGETHER_API_KEYS` |
+| **mistral** | partial | medium | high | `MISTRAL_API_KEYS` |
+| **ollama** | ✅ local | depends on hw | depends on model | `OLLAMA_ENABLED=true` |
+
+Each provider supports **multiple keys separated by commas** for automatic rotation, and **multiple models** that get tried in order. View live status of every provider at the **LLM Providers** tab of the dashboard or via `GET /api/llm/providers`.
+
+---
+
 
 ## What It Does
 
@@ -309,6 +336,28 @@ sudo systemctl status viralstack
 **Discord bot doesn't respond**
 - Make sure `DISCORD_GUILD_ID` and `DISCORD_OWNER_ID` match your actual server and user IDs
 - Only the owner (set in `DISCORD_OWNER_ID`) can execute slash commands
+
+---
+
+## Publishing to GitHub
+
+The repository is GitHub-ready: includes CI workflow (lint + tests + Docker build), bug-report and feature-request templates, a PR template, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and a strengthened `.gitignore` that blocks `.env`, OAuth tokens, cookies, service-account JSONs, `.pem`/`.key` files, SQLite backups, and music files.
+
+```bash
+# 1. Make absolutely sure no secrets are tracked
+git status
+git ls-files | grep -E '\.env$|service_account|cookies\.txt|token\.json' && echo "STOP - secrets tracked!"
+
+# 2. Initialize and push
+git init
+git add .
+git commit -m "ViralStack v1.1.0"
+git branch -M main
+git remote add origin https://github.com/YOUR_USERNAME/viralstack.git
+git push -u origin main
+```
+
+Open a Security Advisory via the **Security → Advisories** tab if you ever discover a vulnerability — see [SECURITY.md](SECURITY.md).
 
 ---
 

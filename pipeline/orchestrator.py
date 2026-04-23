@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from core.db import get_session
 from core.models import Video, PipelineRun
-from core import discord_alerts
+from core import discord_alerts, audit
 from config.settings import settings, is_platform_enabled
 from pipeline import script_gen, video_gen, tts, subtitles, compositor, quality_check
 from pipeline import drive_upload, tiktok_publish, youtube_publish
@@ -84,9 +84,22 @@ async def _publish_youtube(video_id: int, final_path: str, title: str,
 async def produce_video(account: str):
     """Run the complete video production pipeline for an account.
 
-    This is the main function called by the scheduler.
-    Produces ONE video and publishes it to all enabled platforms simultaneously.
+    Wraps `_produce_video_inner` with a hard timeout so a hung step
+    can never block the scheduler forever.
     """
+    timeout = max(60, settings.pipeline_timeout_seconds)
+    try:
+        await asyncio.wait_for(_produce_video_inner(account), timeout=timeout)
+    except asyncio.TimeoutError:
+        msg = f"Pipeline timeout ({timeout}s) for {account}"
+        logger.error(msg)
+        discord_alerts.send_urgent(msg, account=account)
+        audit.record("pipeline_timeout", actor="scheduler", target=account,
+                     details={"timeout_seconds": timeout})
+
+
+async def _produce_video_inner(account: str):
+    """Real pipeline body — produces ONE video and publishes it everywhere."""
     logger.info("=" * 60)
     logger.info("Starting video production for account: %s", account)
     logger.info("=" * 60)
@@ -130,8 +143,14 @@ async def produce_video(account: str):
         video_id = video.id
 
     max_retries = settings.max_retries_per_video
+    quality_threshold = settings.quality_threshold_for(account)
+    audit.record("pipeline_start", actor="scheduler", target=account,
+                 details={"video_id": video_id, "tiktok": tiktok_on, "youtube": youtube_on})
 
     for attempt in range(1, max_retries + 1):
+        # `step_start` is referenced in the broad `except` below — initialise
+        # it now so we never raise NameError when the very first step fails.
+        step_start = datetime.utcnow()
         if attempt > 1:
             logger.info("Retry attempt %d/%d for %s", attempt, max_retries, account)
             _update_video(video_id, retry_count=attempt - 1)
@@ -238,9 +257,13 @@ async def produce_video(account: str):
             _log_step(video_id, "quality_check", "success", step_start,
                        metadata=review)
 
+            # Apply per-account quality threshold (overrides review's default).
+            avg_score = review.get("average_score") or 0.0
+            if avg_score and avg_score < quality_threshold:
+                review["approved"] = False
             if not review["approved"]:
                 discord_alerts.send_warning(
-                    f"Video rechazado (score: {review['average_score']:.1f}/10): "
+                    f"Video rechazado (score: {avg_score:.1f}/{quality_threshold:.1f}): "
                     f"{review['notes']}\nReintentando ({attempt}/{max_retries})...",
                     account=account,
                 )
@@ -291,21 +314,30 @@ async def produce_video(account: str):
             step_start = datetime.utcnow()
             _update_video(video_id, status="publishing")
 
-            publish_tasks = []
             hashtags = script.get("hashtags", [])
+            inter_delay = max(0.0, settings.publish_inter_platform_delay)
 
+            async def _delayed(coro, delay: float):
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                return await coro
+
+            publish_tasks = []
+            platform_order = []  # tracks which platform each result corresponds to
             if tiktok_on:
-                publish_tasks.append(
-                    _publish_tiktok(video_id, final_path, script["title"],
-                                    account, hashtags)
-                )
+                publish_tasks.append(_delayed(
+                    _publish_tiktok(video_id, final_path, script["title"], account, hashtags),
+                    delay=0.0,
+                ))
+                platform_order.append("tiktok")
             if youtube_on:
-                publish_tasks.append(
-                    _publish_youtube(video_id, final_path, script["title"],
-                                     account, hashtags)
-                )
+                publish_tasks.append(_delayed(
+                    _publish_youtube(video_id, final_path, script["title"], account, hashtags),
+                    delay=inter_delay if tiktok_on else 0.0,
+                ))
+                platform_order.append("youtube")
 
-            # Run all platform uploads in parallel
+            # Run all platform uploads in parallel (with optional stagger between)
             results = await asyncio.gather(*publish_tasks, return_exceptions=True)
 
             # Determine final status
@@ -313,17 +345,13 @@ async def produce_video(account: str):
             youtube_url = ""
             any_success = False
 
-            result_idx = 0
-            if tiktok_on:
-                r = results[result_idx]
-                tiktok_url = r if isinstance(r, str) else ""
-                if tiktok_url:
-                    any_success = True
-                result_idx += 1
-            if youtube_on:
-                r = results[result_idx]
-                youtube_url = r if isinstance(r, str) else ""
-                if youtube_url:
+            for plat, r in zip(platform_order, results):
+                url = r if isinstance(r, str) else ""
+                if plat == "tiktok":
+                    tiktok_url = url
+                elif plat == "youtube":
+                    youtube_url = url
+                if url:
                     any_success = True
 
             if any_success:
@@ -349,6 +377,12 @@ async def produce_video(account: str):
             parts.append(f"Drive: {drive_link}")
 
             discord_alerts.send_info("\n".join(parts), account=account)
+            audit.record("pipeline_published", actor="scheduler", target=account, details={
+                "video_id": video_id,
+                "score": avg_score,
+                "tiktok": bool(tiktok_url),
+                "youtube": bool(youtube_url),
+            })
 
             logger.info(
                 "Video %d pipeline complete for %s: %s [TT=%s YT=%s]",

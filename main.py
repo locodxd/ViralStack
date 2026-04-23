@@ -7,27 +7,13 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config.settings import settings
+from config.settings import settings, list_account_ids, ACCOUNTS
 from core.db import init_db
 from core.key_rotation import seed_keys_from_settings
-from core.scheduler import setup_scheduler
+from core.scheduler import setup_scheduler, register_backup_job
 from core import discord_alerts
-
-
-def setup_logging():
-    """Configure logging for the application."""
-    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    log_dir = Path("storage")
-    log_dir.mkdir(exist_ok=True)
-
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format=log_format,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler("storage/automation.log", encoding="utf-8"),
-        ],
-    )
+from core.logging_config import setup_logging
+from core.health import health_snapshot
 
 
 def start_dashboard():
@@ -47,16 +33,24 @@ def start_dashboard():
 
 async def main():
     """Main entry point."""
+    setup_logging()
     logger = logging.getLogger(__name__)
 
-    setup_logging()
     logger.info("=" * 60)
-    logger.info("ViralStack — TikTok + YouTube Shorts Automation")
+    logger.info("ViralStack v%s \u2014 TikTok + YouTube Shorts Automation", settings.version)
     logger.info("=" * 60)
 
     # Initialize database
     init_db()
     logger.info("Database initialized")
+
+    # Health snapshot at startup — warn loudly on failures
+    snap = health_snapshot()
+    for name, check in snap.get("checks", {}).items():
+        if not check.get("ok"):
+            logger.warning("Healthcheck FAIL [%s]: %s", name, check.get("detail"))
+        else:
+            logger.info("Healthcheck OK   [%s]: %s", name, check.get("detail"))
 
     # Seed API keys from .env
     seed_keys_from_settings()
@@ -82,15 +76,19 @@ async def main():
 
     # Setup and start scheduler (pass bot for stats job)
     scheduler = setup_scheduler(bot=bot)
+    register_backup_job(scheduler)
     scheduler.start()
     logger.info("Scheduler started")
 
-    # Send startup notification
+    # Send startup notification — dynamic account list
+    account_names = ", ".join(
+        ACCOUNTS.get(a, {}).get("display_name", a) for a in list_account_ids()
+    ) or "(none)"
     discord_alerts.send_info(
-        "Sistema de automatización iniciado.\n"
+        f"ViralStack v{settings.version} iniciado.\n"
         f"Plataformas: TikTok + YouTube Shorts\n"
         f"Dashboard: http://localhost:{settings.dashboard_port}\n"
-        f"Cuentas activas: Terror, Historias, Dinero\n"
+        f"Cuentas activas: {account_names}\n"
         f"Idioma: {settings.language.upper()}"
     )
 

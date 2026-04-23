@@ -50,6 +50,13 @@ class Video(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     published_at = Column(DateTime)
 
+    __table_args__ = (
+        Index("idx_videos_account_status", "account", "status"),
+        Index("idx_videos_status_created", "status", "created_at"),
+        Index("idx_videos_created", "created_at"),
+        Index("idx_videos_published_at", "published_at"),
+    )
+
     def __repr__(self):
         return f"<Video {self.id} [{self.account}] {self.status}>"
 
@@ -131,3 +138,43 @@ class PipelineRun(Base):
     duration_ms = Column(Integer)
     error_message = Column(Text)
     metadata_json = Column(Text)    # JSON: key used, retry count, etc.
+
+    __table_args__ = (
+        Index("idx_runs_video_step", "video_id", "step"),
+        Index("idx_runs_status", "status"),
+    )
+
+
+class AuditLog(Base):
+    """Append-only log of administrative actions (manual publish, toggles, etc.)."""
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    actor = Column(String(100))           # discord user id, "scheduler", "dashboard:<api-key-prefix>", "system"
+    action = Column(String(80), nullable=False, index=True)
+    target = Column(String(200))          # account, video id, platform, ...
+    details = Column(Text)                # free-form, often JSON
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class VideoMetrics(Base):
+    """Per-video, per-platform engagement snapshots (views/likes/shares).
+
+    Filled in by an optional analytics job. Not used by core pipeline so it stays
+    NULL-safe for users who never enable analytics.
+    """
+    __tablename__ = "video_metrics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(Integer, nullable=False, index=True)
+    platform = Column(String(20), nullable=False)        # tiktok | youtube
+    views = Column(Integer, default=0)
+    likes = Column(Integer, default=0)
+    comments = Column(Integer, default=0)
+    shares = Column(Integer, default=0)
+    captured_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_metrics_video_platform", "video_id", "platform"),
+    )
+

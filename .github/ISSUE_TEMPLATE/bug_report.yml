@@ -1,0 +1,60 @@
+name: Bug report
+description: Reportar un bug de ViralStack
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Qué pasó
+      description: Describe el bug claramente. Adjunta logs si puedes (NUNCA pegues claves API ni cookies).
+      placeholder: "Al ejecutar /publish terror, el bot devuelve..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Pasos para reproducir
+      placeholder: |
+        1. Configurar .env con ...
+        2. Ejecutar `python main.py`
+        3. Mandar `/status` en Discord
+        4. Error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versión de ViralStack
+      placeholder: "1.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Sistema operativo
+      options:
+        - Linux (Docker)
+        - Linux (bare metal)
+        - macOS
+        - Windows
+        - Otro
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Versión de Python
+      placeholder: "3.12"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs relevantes
+      description: "**IMPORTANTE**: revisa que NO contengan claves API, tokens, cookies o emails personales antes de pegarlos."
+      render: shell

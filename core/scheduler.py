@@ -1,10 +1,11 @@
 import logging
 import random
+from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from config.settings import settings, ACCOUNTS
+from config.settings import settings, ACCOUNTS, load_blackout_dates
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +22,31 @@ def create_scheduler() -> AsyncIOScheduler:
         job_defaults={
             "coalesce": True,
             "max_instances": 1,
-            "misfire_grace_time": 3600,
+            "misfire_grace_time": settings.schedule_misfire_grace_seconds,
         },
     )
 
     return scheduler
 
 
-def register_video_jobs(scheduler: AsyncIOScheduler):
-    """Register video production jobs for all accounts.
-
-    Times are pre-randomized in settings.py to non-round minutes
-    (avoids :00, :15, :30, :45 to look human).
-    Additional ±10min jitter is added by APScheduler.
-    """
+async def _produce_video_guarded(account: str):
+    """Wrapper around produce_video with blackout-date + weekend gating."""
     from pipeline.orchestrator import produce_video
+
+    today = datetime.now().date().isoformat()
+    if today in load_blackout_dates():
+        logger.info("Skipping %s production: %s is a blackout date", account, today)
+        return
+
+    if settings.schedule_skip_weekends and datetime.now().weekday() >= 5:
+        logger.info("Skipping %s production: weekend disabled in settings", account)
+        return
+
+    await produce_video(account)
+
+
+def register_video_jobs(scheduler: AsyncIOScheduler):
+    """Register video production jobs for all accounts."""
 
     for account, config in ACCOUNTS.items():
         vpd = config.get("videos_per_day", 0)
@@ -54,13 +65,16 @@ def register_video_jobs(scheduler: AsyncIOScheduler):
 
             job_id = f"video_{account}_{i}"
 
+            day_of_week = "mon-fri" if settings.schedule_skip_weekends else "*"
+
             scheduler.add_job(
-                produce_video,
+                _produce_video_guarded,
                 trigger=CronTrigger(
+                    day_of_week=day_of_week,
                     hour=hour,
                     minute=minute,
                     second=jitter_secs,
-                    jitter=600,  # ±10 min additional jitter from APScheduler
+                    jitter=settings.schedule_jitter_seconds,
                     timezone=settings.timezone,
                 ),
                 args=[account],
@@ -70,21 +84,23 @@ def register_video_jobs(scheduler: AsyncIOScheduler):
             )
 
             logger.info(
-                "Scheduled %s video #%d at %02d:%02d:%02d %s (±10min jitter)",
-                account, i + 1, hour, minute, jitter_secs, settings.timezone,
+                "Scheduled %s video #%d at %02d:%02d:%02d %s (±%ds jitter)",
+                account, i + 1, hour, minute, jitter_secs,
+                settings.timezone, settings.schedule_jitter_seconds,
             )
 
         logger.info("Account %s: %d videos/day scheduled", account, vpd)
 
 
 def register_email_job(scheduler: AsyncIOScheduler):
-    """Register the email polling job (polls all 3 accounts)."""
+    """Register the email polling job (polls all accounts)."""
     from email_agent.gmail_client import poll_and_process
 
+    interval = max(1, settings.email_poll_interval_minutes)
     scheduler.add_job(
         poll_and_process,
         trigger=IntervalTrigger(
-            minutes=30,
+            minutes=interval,
             jitter=300,
             timezone=settings.timezone,
         ),
@@ -92,7 +108,7 @@ def register_email_job(scheduler: AsyncIOScheduler):
         name="Email Agent Poll (all accounts)",
         replace_existing=True,
     )
-    logger.info("Scheduled email polling every 30 minutes (all accounts)")
+    logger.info("Scheduled email polling every %d minutes (all accounts)", interval)
 
 
 def register_daily_stats_job(scheduler: AsyncIOScheduler, bot=None):
@@ -106,12 +122,11 @@ def register_daily_stats_job(scheduler: AsyncIOScheduler, bot=None):
     async def _send_stats():
         await send_daily_stats(bot)
 
-    # Send daily stats at 23:55 (end of day summary)
     scheduler.add_job(
         _send_stats,
         trigger=CronTrigger(
-            hour=23,
-            minute=55,
+            hour=settings.daily_stats_hour,
+            minute=settings.daily_stats_minute,
             timezone=settings.timezone,
         ),
         id="daily_stats",
@@ -119,12 +134,11 @@ def register_daily_stats_job(scheduler: AsyncIOScheduler, bot=None):
         replace_existing=True,
     )
 
-    # Also send a morning briefing at 08:00
     scheduler.add_job(
         _send_stats,
         trigger=CronTrigger(
-            hour=8,
-            minute=0,
+            hour=settings.morning_stats_hour,
+            minute=settings.morning_stats_minute,
             timezone=settings.timezone,
         ),
         id="morning_stats",
@@ -132,7 +146,33 @@ def register_daily_stats_job(scheduler: AsyncIOScheduler, bot=None):
         replace_existing=True,
     )
 
-    logger.info("Scheduled daily stats at 08:00 and 23:55 %s", settings.timezone)
+    logger.info(
+        "Scheduled daily stats at %02d:%02d and %02d:%02d %s",
+        settings.morning_stats_hour, settings.morning_stats_minute,
+        settings.daily_stats_hour, settings.daily_stats_minute,
+        settings.timezone,
+    )
+
+
+def register_backup_job(scheduler: AsyncIOScheduler):
+    """Register a daily SQLite backup job."""
+    if not settings.enable_db_backup:
+        logger.info("DB backup disabled in settings")
+        return
+    from core.backup import backup_database
+
+    scheduler.add_job(
+        backup_database,
+        trigger=CronTrigger(
+            hour=settings.db_backup_hour,
+            minute=0,
+            timezone=settings.timezone,
+        ),
+        id="db_backup",
+        name="Daily SQLite Backup",
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily DB backup at %02d:00 %s", settings.db_backup_hour, settings.timezone)
 
 
 def setup_scheduler(bot=None) -> AsyncIOScheduler:
@@ -146,5 +186,6 @@ def setup_scheduler(bot=None) -> AsyncIOScheduler:
         logger.warning("Email agent not configured, skipping: %s", e)
 
     register_daily_stats_job(scheduler, bot=bot)
+    register_backup_job(scheduler)
 
     return scheduler
