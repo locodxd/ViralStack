@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from config.settings import settings, list_account_ids, load_platform_config
+from config.settings import settings, list_account_ids, list_platform_ids, load_platform_config
 from core.db import get_session
 from core.models import Video
 
@@ -68,5 +68,6 @@ def health_snapshot() -> dict[str, Any]:
     }
 
     snap["accounts"] = list_account_ids()
+    snap["registered_platforms"] = list_platform_ids()
     snap["platforms"] = load_platform_config()
     return snap

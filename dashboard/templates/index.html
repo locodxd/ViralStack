@@ -97,6 +97,12 @@
         .btn-success { background: #474; color: #fff; }
         .btn-danger { background: #744; color: #fff; }
         .btn:hover { filter: brightness(1.2); }
+        .platform-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid #2a2a4a; }
+        .platform-row:first-child { border-top: 0; }
+        .platform-name { color: #ddd; font-weight: 600; }
+        .platform-meta { color: #777; font-size: 12px; }
+        .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: #aaa; font-size: 12px; }
+        .toggle input { width: 16px; height: 16px; accent-color: #00f2ea; }
         @media (max-width: 600px) {
             body { padding: 10px; }
             th, td { padding: 6px; font-size: 11px; }
@@ -122,6 +128,7 @@
     <!-- Tabs -->
     <div class="tabs">
         <button class="tab-btn active" data-tab="overview">Overview</button>
+        <button class="tab-btn" data-tab="platforms">Platforms</button>
         <button class="tab-btn" data-tab="videos">Videos</button>
         <button class="tab-btn" data-tab="providers">LLM Providers</button>
         <button class="tab-btn" data-tab="keys">API Keys</button>
@@ -136,6 +143,14 @@
         <div class="section">
             <h2>Por Cuenta</h2>
             <div class="grid" id="account-grid"></div>
+        </div>
+    </div>
+
+    <!-- Platforms tab -->
+    <div class="tab-pane" data-pane="platforms">
+        <div class="section">
+            <h2>Plataformas por Cuenta</h2>
+            <div class="grid" id="platform-grid"></div>
         </div>
     </div>
 
@@ -280,6 +295,32 @@
         function accountTag(account) {
             return `<span class="account-tag tag-${account}">${account}</span>`;
         }
+        function platformShort(platform, registry) {
+            return (registry[platform] && registry[platform].short_name) || platform.slice(0, 2).toUpperCase();
+        }
+        function platformName(platform, registry) {
+            return (registry[platform] && registry[platform].display_name) || platform;
+        }
+        function renderPlatformCounts(counts, registry) {
+            const entries = Object.entries(counts || {}).filter(([, value]) => value > 0);
+            if (!entries.length) return 'Sin publicaciones por plataforma';
+            return entries.map(([platform, value]) => `${platformShort(platform, registry)}:${value}`).join(' | ');
+        }
+        function renderPlatformLinks(video, registry) {
+            const links = [];
+            if (video.drive_url) links.push(`<a href="${video.drive_url}" target="_blank">Drive</a>`);
+            const results = video.platform_results || {};
+            for (const [platform, result] of Object.entries(results)) {
+                if (result && result.url) {
+                    links.push(`<a href="${result.url}" target="_blank">${platformShort(platform, registry)}</a>`);
+                }
+            }
+            if (!Object.keys(results).length) {
+                if (video.tiktok_url) links.push(`<a href="${video.tiktok_url}" target="_blank">TT</a>`);
+                if (video.youtube_url) links.push(`<a href="${video.youtube_url}" target="_blank">YT</a>`);
+            }
+            return links.join(' | ') || '-';
+        }
 
         // ----- Actions -----
         async function retryVideo(id) {
@@ -295,14 +336,28 @@
             alert(r.ok ? 'Eliminado.' : 'Error al eliminar.');
             loadData();
         }
+        async function togglePlatform(account, platform, enabled) {
+            const r = await authFetch(`/api/platforms/${account}/${platform}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            });
+            if (!r.ok) {
+                const data = await r.json().catch(() => ({}));
+                alert(`Error: ${JSON.stringify(data)}`);
+            }
+            loadData();
+        }
         window.retryVideo = retryVideo;
         window.deleteVideo = deleteVideo;
+        window.togglePlatform = togglePlatform;
 
         // ----- Main loader -----
         async function loadData() {
             try {
                 const [versionRes, healthRes, statsRes, videosRes, keysRes, emailsRes,
-                       auditRes, providersRes, tsRes] = await Promise.all([
+                       auditRes, providersRes, tsRes, platformRegistryRes, platformConfigRes,
+                       accountsRes] = await Promise.all([
                     authFetch('/version'),
                     authFetch('/health'),
                     authFetch('/api/stats'),
@@ -312,6 +367,9 @@
                     authFetch('/api/audit?limit=40'),
                     authFetch('/api/llm/providers'),
                     authFetch('/api/analytics/timeseries?days=30'),
+                    authFetch('/api/platform-registry'),
+                    authFetch('/api/platforms'),
+                    authFetch('/api/accounts'),
                 ]);
 
                 if (statsRes.status === 401 || statsRes.status === 403) {
@@ -330,6 +388,9 @@
                 const auditRows = await auditRes.json().catch(() => []);
                 const providers = await providersRes.json().catch(() => ({ providers: [], chain: [] }));
                 const ts = await tsRes.json().catch(() => ({ series: {}, accounts: [] }));
+                const platformRegistry = await platformRegistryRes.json().catch(() => ({}));
+                const platformConfig = await platformConfigRes.json().catch(() => ({}));
+                const accounts = await accountsRes.json().catch(() => ({}));
 
                 document.getElementById('version-tag').textContent = ver.version ? `v${ver.version}` : '';
                 const pill = document.getElementById('health-pill');
@@ -350,10 +411,34 @@
                     accountHtml += `<div class="card">
                         ${accountTag(acc)}
                         <div class="stat-value" style="margin-top:10px">${data.published_total}</div>
-                        <div class="stat-label">Publicados (${data.today} hoy) — TT:${data.tiktok} | YT:${data.youtube}</div>
+                        <div class="stat-label">Publicados (${data.today} hoy) — ${renderPlatformCounts(data.platforms || {}, platformRegistry)}</div>
                     </div>`;
                 }
                 document.getElementById('account-grid').innerHTML = accountHtml || '<p style="color:#888">Sin cuentas registradas.</p>';
+
+                // Platform controls
+                const platformHtml = Object.entries(accounts || {}).map(([acc, accountData]) => {
+                    const toggles = platformConfig[acc] || {};
+                    const rows = Object.entries(platformRegistry || {}).map(([platform, meta]) => `
+                        <div class="platform-row">
+                            <div>
+                                <div class="platform-name">${platformName(platform, platformRegistry)}</div>
+                                <div class="platform-meta">${meta.publisher || 'manual'}${meta.supports_direct_publish ? ' · directo' : ' · webhook/manual'}</div>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" ${toggles[platform] ? 'checked' : ''}
+                                       onchange="togglePlatform('${acc}', '${platform}', this.checked)">
+                                ${toggles[platform] ? 'ON' : 'OFF'}
+                            </label>
+                        </div>
+                    `).join('');
+                    return `<div class="card">
+                        ${accountTag(acc)}
+                        <div style="margin:8px 0 12px;color:#aaa">${accountData.display_name || acc}</div>
+                        ${rows || '<p style="color:#888">Sin plataformas registradas.</p>'}
+                    </div>`;
+                }).join('');
+                document.getElementById('platform-grid').innerHTML = platformHtml || '<p style="color:#888">Sin cuentas registradas.</p>';
 
                 // Videos table
                 document.getElementById('videos-table').innerHTML = videos.map(v => `
@@ -363,11 +448,7 @@
                         <td>${(v.title || '-').substring(0, 40)}</td>
                         <td class="score ${scoreClass(v.quality_score)}">${v.quality_score ? v.quality_score.toFixed(1) : '-'}</td>
                         <td><span class="status-badge ${statusClass(v.status)}">${v.status}</span></td>
-                        <td>
-                            ${v.drive_url ? `<a href="${v.drive_url}" target="_blank">Drive</a>` : ''}
-                            ${v.tiktok_url ? ` | <a href="${v.tiktok_url}" target="_blank">TT</a>` : ''}
-                            ${v.youtube_url ? ` | <a href="${v.youtube_url}" target="_blank">YT</a>` : ''}
-                        </td>
+                        <td>${renderPlatformLinks(v, platformRegistry)}</td>
                         <td>${formatDate(v.created_at)}</td>
                         <td>
                             <button class="btn btn-primary" onclick="retryVideo(${v.id})">↻</button>

@@ -1,10 +1,10 @@
 # ViralStack
 
-> **v1.1** — see [CHANGELOG.md](CHANGELOG.md) for the full changelog. Highlights: **multi-LLM script generation** (Gemini · OpenAI · Claude · OpenRouter · Groq · DeepSeek · Together · Mistral · Ollama), tabbed dashboard with `/api/llm/providers` health view, dynamic accounts via `config/accounts.json`, optional API-key auth, multi-channel notifications (Slack/Telegram/webhook), automatic SQLite backups, audit log, hard pipeline timeouts, per-account quality thresholds, blackout dates, weekend skip, `/health` endpoint, ~60 new env-tunable settings, GitHub-ready (CI, issue/PR templates, SECURITY/CONTRIBUTING/COC), and many bug fixes.
+> **v1.2** — platform registry, Instagram/Reels webhook support, dynamic platform toggles in the dashboard/Discord bot, generic per-platform publish results, better custom-account support, safer SQLite auto-migration, and more configurable account/script/video settings. See [CHANGELOG.md](CHANGELOG.md).
 
-An open-source AI-powered system that automates the creation and publishing of short-form content for TikTok and YouTube. From idea generation to video production and upload — fully autonomous, scalable, and customizable.
+An open-source AI-powered system that automates the creation and publishing of short-form content for TikTok, YouTube Shorts, Instagram Reels via webhook, and other configurable platforms. From idea generation to video production and upload — fully autonomous, scalable, and customizable.
 
-The system manages **3 independent accounts** (or as many as you configure), generates scripts with the LLM provider of your choice, creates images with Imagen 4.0, narrates with TTS, adds subtitles, composes the final video, and publishes to both platforms simultaneously.
+The system manages **3 independent accounts** (or as many as you configure), generates scripts with the LLM provider of your choice, creates images with Imagen 4.0, narrates with TTS, adds subtitles, composes the final video, and publishes to every enabled platform simultaneously.
 
 ---
 
@@ -152,7 +152,7 @@ This runs continuously, publishing videos at scheduled random times throughout t
 
 ## Account Configuration
 
-By default the project is set up for 3 content niches. You can rename them, remove some, or add more by editing `config/platforms.json` and the prompts in `config/prompts/`.
+By default the project is set up for 3 content niches. You can rename them, remove some, or add more by creating `config/accounts.json` from [config/accounts.example.json](config/accounts.example.json) and adding a matching prompt file in `config/prompts/`.
 
 | Account | Niche | Default content style |
 |---------|-------|----------------------|
@@ -165,13 +165,26 @@ You can customize the style and tone of each niche by editing:
 - `config/prompts/historias.yaml`
 - `config/prompts/dinero.yaml`
 
+Custom accounts can define `videos_per_day`, `quality_threshold`, `min_words`, `max_words`, `hook_min_words`, `hook_max_words`, `youtube_category_id`, per-platform hashtags, image style, music directory, token/cookie paths, and platform toggles.
+
+## Platform Configuration
+
+v1.2 introduces a platform registry in [config/platform_registry.json](config/platform_registry.json):
+
+- `tiktok` uses the built-in TikTok uploader.
+- `youtube` uses the built-in YouTube Data API uploader.
+- `instagram` is registered as Instagram Reels and is disabled by default. Enable it per account in the dashboard or `config/platforms.json`, then set `INSTAGRAM_WEBHOOK_URL` to publish through Make, Zapier, n8n, or your own endpoint.
+
+To add another platform with minimal code changes, add it to `config/platform_registry.json` with `publisher: "webhook"`, a `webhook_url` or `webhook_url_env`, and a `hashtags_key`. The pipeline will include it in toggles, dashboard stats, audit logs, and per-video platform results automatically.
+
 ---
 
 ## Dashboard
 
 Once running, open `http://localhost:8000` to see:
-- All videos with their status, quality score, TikTok URL, YouTube URL
+- All videos with their status, quality score, Drive URL, and per-platform publish results
 - Stats per account and platform
+- Platform toggles per account, including Instagram/custom platforms
 - Email activity
 - Step-by-step pipeline logs per video
 
@@ -187,7 +200,7 @@ The Discord bot lets you control the system remotely from your phone.
 |---------|-------------|
 | `/status` | System overview — videos published, accounts, platform status |
 | `/publish <account> [platform]` | Force publish a video right now |
-| `/toggle <account> <platform>` | Enable/disable TikTok or YouTube for an account |
+| `/toggle <account> <platform>` | Enable/disable any registered platform for an account |
 | `/config` | View current configuration |
 | `/schedule` | View upcoming scheduled videos |
 | `/emails [account]` | View recent email activity |
@@ -251,7 +264,8 @@ sudo systemctl status viralstack
 ├── easyrun.py                  # GUI launcher for manual testing
 ├── config/
 │   ├── settings.py             # All configuration (reads from .env)
-│   ├── platforms.json          # Enable/disable TikTok & YouTube per account
+│   ├── platform_registry.json  # Registered publish targets (TikTok, YouTube, Instagram/webhooks)
+│   ├── platforms.json          # Enable/disable platforms per account
 │   └── prompts/
 │       ├── terror.yaml         # Horror niche prompts (EN + ES)
 │       ├── historias.yaml      # Real stories niche prompts (EN + ES)
@@ -351,7 +365,7 @@ git ls-files | grep -E '\.env$|service_account|cookies\.txt|token\.json' && echo
 # 2. Initialize and push
 git init
 git add .
-git commit -m "ViralStack v1.1.0"
+git commit -m "ViralStack v1.2.0"
 git branch -M main
 git remote add origin https://github.com/YOUR_USERNAME/viralstack.git
 git push -u origin main

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -10,12 +11,17 @@ from core.models import Video, ApiKey, EmailThread, PipelineRun, AuditLog, Video
 from core import audit
 from config.settings import (
     settings,
+    get_platform_info,
     load_platform_config,
+    load_platform_registry,
     save_platform_config,
     toggle_platform,
     load_blackout_dates,
     save_blackout_dates,
     list_account_ids,
+    list_platform_ids,
+    platform_display_name,
+    resolve_project_path,
     ACCOUNTS,
     BASE_DIR,
 )
@@ -25,6 +31,31 @@ router = APIRouter()
 
 def _page_size(limit: int) -> int:
     return max(1, min(settings.dashboard_max_page_size, limit))
+
+
+def _json_map(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _platform_counts_from_rows(rows) -> dict[str, int]:
+    counts = {platform: 0 for platform in list_platform_ids()}
+    for raw_results, tiktok_published, youtube_published in rows:
+        results = _json_map(raw_results)
+        for platform, result in results.items():
+            if isinstance(result, dict) and result.get("ok"):
+                counts[platform] = counts.get(platform, 0) + 1
+        if not results:
+            if tiktok_published:
+                counts["tiktok"] = counts.get("tiktok", 0) + 1
+            if youtube_published:
+                counts["youtube"] = counts.get("youtube", 0) + 1
+    return counts
 
 
 @router.get("/videos")
@@ -57,6 +88,9 @@ async def get_videos(
                 "youtube_url": v.youtube_url,
                 "tiktok_published": v.tiktok_published,
                 "youtube_published": v.youtube_published,
+                "platforms_enabled": _json_map(v.platforms_enabled_json),
+                "platform_results": _json_map(v.platform_results_json),
+                "platform_errors": _json_map(v.platform_errors_json),
                 "retry_count": v.retry_count,
                 "error_message": v.error_message,
                 "created_at": v.created_at.isoformat() if v.created_at else None,
@@ -86,6 +120,9 @@ async def get_video(video_id: int):
             "drive_url": v.drive_url,
             "tiktok_url": v.tiktok_url,
             "youtube_url": v.youtube_url,
+            "platforms_enabled": _json_map(v.platforms_enabled_json),
+            "platform_results": _json_map(v.platform_results_json),
+            "platform_errors": _json_map(v.platform_errors_json),
             "retry_count": v.retry_count,
             "error_message": v.error_message,
             "estimated_duration": v.estimated_duration,
@@ -172,8 +209,14 @@ async def get_stats():
         failed = session.query(Video).filter(Video.status == "failed").count()
         rejected = session.query(Video).filter(Video.status == "rejected").count()
 
-        tiktok_published = session.query(Video).filter(Video.tiktok_published == True).count()  # noqa: E712
-        youtube_published = session.query(Video).filter(Video.youtube_published == True).count()  # noqa: E712
+        platform_rows = session.query(
+            Video.platform_results_json,
+            Video.tiktok_published,
+            Video.youtube_published,
+        ).all()
+        platform_published = _platform_counts_from_rows(platform_rows)
+        tiktok_published = platform_published.get("tiktok", 0)
+        youtube_published = platform_published.get("youtube", 0)
 
         avg_score = session.query(func.avg(Video.quality_score)).filter(
             Video.quality_score != None  # noqa: E711
@@ -188,18 +231,19 @@ async def get_stats():
             account_today = session.query(Video).filter(
                 Video.account == account, Video.created_at >= today,
             ).count()
-            account_tiktok = session.query(Video).filter(
-                Video.account == account, Video.tiktok_published == True,  # noqa: E712
-            ).count()
-            account_youtube = session.query(Video).filter(
-                Video.account == account, Video.youtube_published == True,  # noqa: E712
-            ).count()
+            account_platform_rows = session.query(
+                Video.platform_results_json,
+                Video.tiktok_published,
+                Video.youtube_published,
+            ).filter(Video.account == account).all()
+            account_platforms = _platform_counts_from_rows(account_platform_rows)
             account_stats[account] = {
                 "display_name": ACCOUNTS.get(account, {}).get("display_name", account),
                 "published_total": account_published,
                 "today": account_today,
-                "tiktok": account_tiktok,
-                "youtube": account_youtube,
+                "tiktok": account_platforms.get("tiktok", 0),
+                "youtube": account_platforms.get("youtube", 0),
+                "platforms": account_platforms,
             }
 
         platform_config = load_platform_config()
@@ -211,6 +255,7 @@ async def get_stats():
             "rejected": rejected,
             "tiktok_published": tiktok_published,
             "youtube_published": youtube_published,
+            "platform_published": platform_published,
             "today": today_count,
             "this_week": week_count,
             "this_month": month_count,
@@ -302,14 +347,32 @@ async def get_platforms():
     return load_platform_config()
 
 
+@router.get("/platform-registry")
+async def get_platform_registry():
+    """Get configured platform metadata without leaking webhook URLs."""
+    registry = load_platform_registry()
+    safe = {}
+    for platform, info in registry.items():
+        safe[platform] = {
+            key: value
+            for key, value in info.items()
+            if key not in {"webhook_url"}
+        }
+        safe[platform]["display_name"] = platform_display_name(platform)
+    return safe
+
+
 @router.post("/platforms/{account}/{platform}")
 async def set_platform(account: str, platform: str, enabled: bool = Body(..., embed=True)):
     """Enable or disable a platform for an account."""
     if account not in list_account_ids():
         raise HTTPException(404, f"Unknown account: {account}")
-    if platform not in {"tiktok", "youtube"}:
-        raise HTTPException(400, "Platform must be 'tiktok' or 'youtube'")
-    cfg = toggle_platform(account, platform, bool(enabled))
+    if not get_platform_info(platform):
+        raise HTTPException(400, f"Platform must be one of: {', '.join(list_platform_ids())}")
+    try:
+        cfg = toggle_platform(account, platform, bool(enabled))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     audit.record("platform_toggle", actor="dashboard",
                  target=f"{account}:{platform}", details={"enabled": bool(enabled)})
     return cfg
@@ -382,7 +445,7 @@ async def get_accounts():
 async def get_prompt(account: str):
     """Read a prompt YAML file. Falls back to config/prompts/{account}.yaml."""
     cfg = ACCOUNTS.get(account, {})
-    path = Path(cfg.get("prompt_file") or BASE_DIR / "config" / "prompts" / f"{account}.yaml")
+    path = Path(resolve_project_path(cfg.get("prompt_file"))) if cfg.get("prompt_file") else BASE_DIR / "config" / "prompts" / f"{account}.yaml"
     if not path.exists():
         raise HTTPException(404, f"Prompt file not found: {path}")
     return {"path": str(path), "content": path.read_text(encoding="utf-8")}
@@ -392,7 +455,7 @@ async def get_prompt(account: str):
 async def put_prompt(account: str, content: str = Body(..., embed=True)):
     """Replace a prompt YAML file. Validates YAML before writing."""
     cfg = ACCOUNTS.get(account, {})
-    path = Path(cfg.get("prompt_file") or BASE_DIR / "config" / "prompts" / f"{account}.yaml")
+    path = Path(resolve_project_path(cfg.get("prompt_file"))) if cfg.get("prompt_file") else BASE_DIR / "config" / "prompts" / f"{account}.yaml"
     try:
         import yaml
         yaml.safe_load(content)
@@ -496,5 +559,7 @@ async def safe_settings():
         "music_volume_percent", "narration_volume_boost",
         "whisper_model", "whisper_device",
         "dashboard_auto_refresh_seconds",
+        "platform_webhook_timeout_seconds",
+        "publish_inter_platform_delay",
     }
     return {k: getattr(settings, k) for k in keep if hasattr(settings, k)}

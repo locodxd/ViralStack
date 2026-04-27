@@ -7,10 +7,10 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config.settings import settings, list_account_ids, ACCOUNTS
+from config.settings import settings, list_account_ids, list_platform_ids, platform_display_name, ACCOUNTS
 from core.db import init_db
 from core.key_rotation import seed_keys_from_settings
-from core.scheduler import setup_scheduler, register_backup_job
+from core.scheduler import setup_scheduler
 from core import discord_alerts
 from core.logging_config import setup_logging
 from core.health import health_snapshot
@@ -37,7 +37,7 @@ async def main():
     logger = logging.getLogger(__name__)
 
     logger.info("=" * 60)
-    logger.info("ViralStack v%s \u2014 TikTok + YouTube Shorts Automation", settings.version)
+    logger.info("ViralStack v%s - Short-form automation", settings.version)
     logger.info("=" * 60)
 
     # Initialize database
@@ -76,7 +76,6 @@ async def main():
 
     # Setup and start scheduler (pass bot for stats job)
     scheduler = setup_scheduler(bot=bot)
-    register_backup_job(scheduler)
     scheduler.start()
     logger.info("Scheduler started")
 
@@ -84,9 +83,10 @@ async def main():
     account_names = ", ".join(
         ACCOUNTS.get(a, {}).get("display_name", a) for a in list_account_ids()
     ) or "(none)"
+    platform_names = ", ".join(platform_display_name(p) for p in list_platform_ids()) or "(none)"
     discord_alerts.send_info(
         f"ViralStack v{settings.version} iniciado.\n"
-        f"Plataformas: TikTok + YouTube Shorts\n"
+        f"Plataformas: {platform_names}\n"
         f"Dashboard: http://localhost:{settings.dashboard_port}\n"
         f"Cuentas activas: {account_names}\n"
         f"Idioma: {settings.language.upper()}"

@@ -1,7 +1,7 @@
 """
 Slash commands for the automation Discord bot.
 
-v1.1 commands:
+v1.2 commands:
 - /status               System status overview
 - /publish              Force manual video production
 - /toggle               Enable/disable platform per account
@@ -9,8 +9,8 @@ v1.1 commands:
 - /schedule             View upcoming scheduled videos
 - /emails               Recent email activity
 - /retry video_id       Retry a specific video by id
-- /pause account        Disable BOTH platforms for an account
-- /resume account       Enable BOTH platforms for an account
+- /pause account        Disable all platforms for an account
+- /resume account       Enable all registered platforms for an account
 - /backup               Trigger an immediate DB backup
 - /blackout add/list/clear  Manage blackout dates
 - /health               System health check
@@ -23,8 +23,9 @@ from typing import Optional
 import discord
 from discord import app_commands
 from config.settings import (
-    settings, ACCOUNTS, load_platform_config, toggle_platform, is_platform_enabled,
-    list_account_ids, load_blackout_dates, save_blackout_dates,
+    settings, ACCOUNTS, enabled_platforms_for, load_platform_config, toggle_platform,
+    is_platform_enabled, list_account_ids, list_platform_ids, load_blackout_dates,
+    platform_display_name, platform_short_name, save_blackout_dates,
 )
 from core.db import get_session
 from core.models import Video, EmailThread
@@ -43,9 +44,18 @@ def _account_choices() -> list[app_commands.Choice[str]]:
 ACCOUNT_CHOICES = _account_choices()
 
 PLATFORM_CHOICES = [
-    app_commands.Choice(name="TikTok", value="tiktok"),
-    app_commands.Choice(name="YouTube", value="youtube"),
-]
+    app_commands.Choice(name=platform_display_name(platform), value=platform)
+    for platform in list_platform_ids()
+][:25]
+
+
+def _platform_state_line(account: str, config: dict | None = None) -> str:
+    config = config or load_platform_config()
+    parts = []
+    for platform in list_platform_ids():
+        enabled = config.get(account, {}).get(platform, is_platform_enabled(account, platform))
+        parts.append(f"{platform_short_name(platform)}={'ON' if enabled else 'OFF'}")
+    return " | ".join(parts) if parts else "NINGUNA"
 
 
 def setup_commands(bot):
@@ -78,13 +88,7 @@ def setup_commands(bot):
                     Video.account == acc_name, Video.created_at >= today
                 ).count()
 
-                tt = is_platform_enabled(acc_name, "tiktok")
-                yt = is_platform_enabled(acc_name, "youtube")
-                platforms = []
-                if tt:
-                    platforms.append("TT")
-                if yt:
-                    platforms.append("YT")
+                platforms = [platform_short_name(p) for p in enabled_platforms_for(acc_name)]
 
                 acc_display = ACCOUNTS.get(acc_name, {}).get("display_name", acc_name)
                 account_lines.append(
@@ -144,14 +148,16 @@ def setup_commands(bot):
 
         acc = account.value
 
-        # Temporarily override platform config if specific platform requested
+        original_states = {}
+        # Temporarily override platform config if a specific platform was requested
         if platform:
             plat = platform.value
-            other = "youtube" if plat == "tiktok" else "tiktok"
-            # Save current state
-            orig_other = is_platform_enabled(acc, other)
-            toggle_platform(acc, other, False)
-            toggle_platform(acc, plat, True)
+            original_states = {
+                candidate: is_platform_enabled(acc, candidate)
+                for candidate in list_platform_ids()
+            }
+            for candidate in original_states:
+                toggle_platform(acc, candidate, candidate == plat)
 
         await interaction.followup.send(
             f"Iniciando producción manual para **{account.name}**... "
@@ -168,7 +174,8 @@ def setup_commands(bot):
         finally:
             # Restore platform config if we changed it
             if platform:
-                toggle_platform(acc, other, orig_other)
+                for candidate, enabled in original_states.items():
+                    toggle_platform(acc, candidate, enabled)
 
     @bot.tree.command(name="toggle", description="Habilitar/deshabilitar plataforma para una cuenta")
     @app_commands.describe(
@@ -206,9 +213,7 @@ def setup_commands(bot):
         config_lines = []
         for a, platforms in config.items():
             display = ACCOUNTS.get(a, {}).get("display_name", a)
-            tt = "ON" if platforms.get("tiktok") else "OFF"
-            yt = "ON" if platforms.get("youtube") else "OFF"
-            config_lines.append(f"{display}: TikTok={tt} | YouTube={yt}")
+            config_lines.append(f"{display}: {_platform_state_line(a, config)}")
 
         embed.add_field(
             name="Configuración Actual",
@@ -233,8 +238,6 @@ def setup_commands(bot):
         for acc_name in list_account_ids():
             display = ACCOUNTS.get(acc_name, {}).get("display_name", acc_name)
             vpd = ACCOUNTS.get(acc_name, {}).get("videos_per_day", 0)
-            tt = "ON" if config.get(acc_name, {}).get("tiktok") else "OFF"
-            yt = "ON" if config.get(acc_name, {}).get("youtube") else "OFF"
             windows = ACCOUNTS.get(acc_name, {}).get("schedule_windows", [])
             times = ", ".join([f"{w['hour']:02d}:{w['minute']:02d}" for w in windows])
 
@@ -242,7 +245,7 @@ def setup_commands(bot):
                 name=f"{display}",
                 value=(
                     f"Videos/día: **{vpd}**\n"
-                    f"TikTok: **{tt}** | YouTube: **{yt}**\n"
+                    f"Plataformas: **{_platform_state_line(acc_name, config)}**\n"
                     f"Horarios: {times or 'N/A'}"
                 ),
                 inline=False,
@@ -286,16 +289,13 @@ def setup_commands(bot):
                 )
                 continue
 
-            tt = "ON" if is_platform_enabled(acc_name, "tiktok") else "OFF"
-            yt = "ON" if is_platform_enabled(acc_name, "youtube") else "OFF"
-
             schedule_lines = []
             for i, w in enumerate(windows):
                 schedule_lines.append(
                     f"#{i+1}: **{w['hour']:02d}:{w['minute']:02d}** (±10min)"
                 )
 
-            schedule_lines.append(f"\nPlataformas: TikTok={tt} | YouTube={yt}")
+            schedule_lines.append(f"\nPlataformas: {_platform_state_line(acc_name)}")
 
             embed.add_field(
                 name=f"{display} ({vpd} videos/día)",
@@ -355,7 +355,7 @@ def setup_commands(bot):
         await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------------
-    # v1.1 commands
+    # v1.2 commands
     # ------------------------------------------------------------------
 
     @bot.tree.command(name="retry", description="Re-encolar la producción de un video por id")
@@ -376,30 +376,30 @@ def setup_commands(bot):
                      target=str(video_id), details={"account": account})
         await interaction.followup.send(f"Reintentando video {video_id} (cuenta: {account}).")
 
-    @bot.tree.command(name="pause", description="Deshabilitar AMBAS plataformas de una cuenta")
+    @bot.tree.command(name="pause", description="Deshabilitar todas las plataformas de una cuenta")
     @app_commands.describe(account="Cuenta a pausar")
     @app_commands.choices(account=ACCOUNT_CHOICES)
     @owner_only()
     async def pause_cmd(interaction: discord.Interaction,
                         account: app_commands.Choice[str]):
-        toggle_platform(account.value, "tiktok", False)
-        toggle_platform(account.value, "youtube", False)
+        for platform in list_platform_ids():
+            toggle_platform(account.value, platform, False)
         audit.record("account_pause", actor=str(interaction.user.id), target=account.value)
         await interaction.response.send_message(
-            f"Cuenta **{account.name}** pausada (TikTok+YouTube OFF).", ephemeral=True
+            f"Cuenta **{account.name}** pausada (plataformas OFF).", ephemeral=True
         )
 
-    @bot.tree.command(name="resume", description="Habilitar AMBAS plataformas de una cuenta")
+    @bot.tree.command(name="resume", description="Habilitar todas las plataformas de una cuenta")
     @app_commands.describe(account="Cuenta a reanudar")
     @app_commands.choices(account=ACCOUNT_CHOICES)
     @owner_only()
     async def resume_cmd(interaction: discord.Interaction,
                          account: app_commands.Choice[str]):
-        toggle_platform(account.value, "tiktok", True)
-        toggle_platform(account.value, "youtube", True)
+        for platform in list_platform_ids():
+            toggle_platform(account.value, platform, True)
         audit.record("account_resume", actor=str(interaction.user.id), target=account.value)
         await interaction.response.send_message(
-            f"Cuenta **{account.name}** reanudada (TikTok+YouTube ON).", ephemeral=True
+            f"Cuenta **{account.name}** reanudada (plataformas ON).", ephemeral=True
         )
 
     @bot.tree.command(name="backup", description="Crear un backup inmediato de la base de datos")

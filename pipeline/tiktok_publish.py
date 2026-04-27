@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from config.settings import settings, ACCOUNTS
+from config.settings import ACCOUNTS, get_cookies_path_for
 
 logger = logging.getLogger(__name__)
 _UPLOAD_WORKER = Path(__file__).resolve().parent.parent / "tools" / "tiktok_upload_worker.py"
@@ -26,7 +26,7 @@ async def publish_to_tiktok(
     collide with the asyncio event loop. Returns the TikTok URL when available,
     otherwise falls back to the profile URL after a confirmed successful upload.
     """
-    cookies_path = settings.get_cookies_path(account)
+    cookies_path = get_cookies_path_for(account)
     if not cookies_path or not Path(cookies_path).exists():
         logger.error("No cookies found for account %s at %s", account, cookies_path)
         raise FileNotFoundError(f"TikTok cookies not found for {account}: {cookies_path}")

@@ -18,7 +18,7 @@ import threading
 import time
 from pathlib import Path
 
-from config.settings import settings
+from config.settings import ACCOUNTS, settings
 from core import discord_alerts
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,26 @@ _EMERGENCY_COLORS = {
     "historias": "0x2B211C",
     "dinero": "0x182328",
 }
+
+
+def _account_config(account: str) -> dict:
+    return ACCOUNTS.get(account, {})
+
+
+def _style_suffix(account: str) -> str:
+    return _account_config(account).get("image_style") or _STYLE_SUFFIXES.get(account, "")
+
+
+def _style_fallback(account: str) -> str:
+    return (
+        _account_config(account).get("image_style_fallback")
+        or _STYLE_FALLBACKS.get(account)
+        or "Photorealistic cinematic vertical scene"
+    )
+
+
+def _emergency_color(account: str) -> str:
+    return _account_config(account).get("emergency_color") or _EMERGENCY_COLORS.get(account, "0x1C1C1C")
 
 
 def _get_cache_dir() -> Path:
@@ -310,10 +330,7 @@ def _truncate_words(text: str, max_words: int) -> str:
 
 def _build_prompt_variants(prompt: str, account: str) -> list[str]:
     """Generate progressively simpler prompts for Flash fallback."""
-    cleaned_prompt = _clean_visual_prompt(prompt) or _STYLE_FALLBACKS.get(
-        account,
-        "Photorealistic cinematic vertical scene",
-    )
+    cleaned_prompt = _clean_visual_prompt(prompt) or _style_fallback(account)
     no_text_guard = (
         "No visible text, no subtitles, no captions, no letters, no words, "
         "no watermarks, no logos."
@@ -322,10 +339,10 @@ def _build_prompt_variants(prompt: str, account: str) -> list[str]:
     first_clause = re.split(r"[.;:]", cleaned_prompt, maxsplit=1)[0].strip()
     concise_clause = _truncate_words(first_clause or cleaned_prompt, 26)
     broad_clause = _truncate_words(cleaned_prompt, 18)
-    fallback_style = _STYLE_FALLBACKS.get(account, "Photorealistic cinematic vertical scene")
+    fallback_style = _style_fallback(account)
 
     candidates = [
-        f"{cleaned_prompt}. {_STYLE_SUFFIXES.get(account, '')}. {no_text_guard}",
+        f"{cleaned_prompt}. {_style_suffix(account)}. {no_text_guard}",
         f"{concise_clause}. {fallback_style}. {no_text_guard}",
         f"{broad_clause}. {fallback_style}. {no_text_guard}",
         f"{fallback_style}. {no_text_guard}",
@@ -416,7 +433,7 @@ def _create_emergency_frame(output_dir: Path, account: str, index: int) -> str:
     """Create a local frame when every external image source is unavailable."""
     fallback_path = output_dir / f"scene_{index:03d}_emergency.png"
     ffmpeg = _get_ffmpeg_path()
-    color = _EMERGENCY_COLORS.get(account, "0x1C1C1C")
+    color = _emergency_color(account)
 
     try:
         cmd = [
@@ -548,7 +565,7 @@ async def generate_video(visual_prompts: list, account: str, video_id: int) -> l
 
     prompts = list(visual_prompts or [])
     if not prompts:
-        prompts = [_STYLE_FALLBACKS.get(account, "Photorealistic cinematic vertical scene")]
+        prompts = [_style_fallback(account)]
         logger.warning(
             "No visual prompts received for %s video %d, using generic fallback scene",
             account,

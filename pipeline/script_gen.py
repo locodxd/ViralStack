@@ -8,7 +8,7 @@ from core.key_rotation import gemini_rotator
 from core.db import get_session
 from core.models import IdeaHistory
 from core import llm_providers
-from config.settings import settings
+from config.settings import ACCOUNTS, resolve_project_path, settings
 
 logger = logging.getLogger(__name__)
 
@@ -161,13 +161,52 @@ _FIELD_MAP = {
 }
 
 
+def _account_config(account: str) -> dict:
+    return ACCOUNTS.get(account, {})
+
+
+def _account_int(account: str, key: str, default: int) -> int:
+    try:
+        return int(_account_config(account).get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _word_limits_for(account: str) -> tuple[int, int]:
+    min_words = _account_int(account, "min_words", _MIN_WORDS_BY_ACCOUNT.get(account, 80))
+    max_words = _account_int(account, "max_words", _MAX_WORDS_BY_ACCOUNT.get(account, 240))
+    return max(1, min_words), max(max_words, min_words)
+
+
+def _duration_limits_for(account: str) -> tuple[int, int]:
+    min_default, max_default = _DURATION_LIMITS.get(
+        account,
+        (settings.min_video_seconds, settings.max_video_seconds),
+    )
+    min_duration = _account_int(account, "duration_min_seconds", min_default)
+    max_duration = _account_int(account, "duration_max_seconds", max_default)
+    return max(1, min_duration), max(max_duration, min_duration)
+
+
+def _hook_word_limits_for(account: str) -> tuple[int, int]:
+    min_default, max_default = _HOOK_WORD_LIMITS.get(account, (5, 16))
+    min_words = _account_int(account, "hook_min_words", min_default)
+    max_words = _account_int(account, "hook_max_words", max_default)
+    return max(1, min_words), max(max_words, min_words)
+
+
 def _load_prompt_config(account: str) -> dict:
     """Load the prompt YAML config for an account, language-aware."""
-    path = PROMPTS_DIR / f"{account}.yaml"
+    account_cfg = _account_config(account)
+    path = Path(resolve_project_path(account_cfg.get("prompt_file"))) if account_cfg.get("prompt_file") else PROMPTS_DIR / f"{account}.yaml"
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     lang = "en" if settings.is_english else "es"
-    return data[lang]
+    if isinstance(data, dict) and lang in data:
+        return data[lang]
+    if isinstance(data, dict) and {"system_prompt", "script_prompt"}.issubset(data.keys()):
+        return data
+    raise RuntimeError(f"Prompt file {path} must contain '{lang}' or system_prompt/script_prompt")
 
 
 def _get_previous_ideas_compact(account: str, limit: int = 50) -> str:
@@ -351,7 +390,7 @@ def _trim_script_to_max_words(script_text: str, max_words: int) -> str:
 def _enforce_script_bounds(script_text: str, account: str) -> str:
     """Normalize pacing and clamp overly long scripts before TTS."""
     text = _trim_to_last_sentence(_normalize_script_pacing(script_text))
-    max_words = _MAX_WORDS_BY_ACCOUNT.get(account, 240)
+    _, max_words = _word_limits_for(account)
     return _trim_script_to_max_words(text, max_words)
 
 
@@ -364,7 +403,7 @@ def _hook_validation_reasons(hook_text: str, script_text: str, account: str) -> 
     lang = "en" if settings.is_english else "es"
     lower = hook.casefold()
     hook_words = _normalized_words(hook)
-    min_words, max_words = _HOOK_WORD_LIMITS.get(account, (5, 16))
+    min_words, max_words = _hook_word_limits_for(account)
     reasons = []
 
     if len(hook_words) < min_words:
@@ -409,9 +448,8 @@ def _script_validation_reasons(parsed: dict, account: str, raw_text: str) -> lis
     script_text = (parsed.get("script_text") or "").strip()
     visuals = parsed.get("visual_prompts") or []
     estimated_duration = int(parsed.get("estimated_duration") or 0)
-    min_d, max_d = _DURATION_LIMITS.get(account, (settings.min_video_seconds, settings.max_video_seconds))
-    min_words = _MIN_WORDS_BY_ACCOUNT.get(account, 80)
-    max_words = _MAX_WORDS_BY_ACCOUNT.get(account, 240)
+    min_d, max_d = _duration_limits_for(account)
+    min_words, max_words = _word_limits_for(account)
     words = re.findall(r"\b\w+\b", script_text)
     reasons = []
 
@@ -461,9 +499,7 @@ def _estimate_duration_from_words(script_text: str) -> int:
 
 def _normalize_duration(account: str, model_duration: int, script_text: str) -> int:
     """Blend model estimate with text-based estimate and clamp by account."""
-    min_d, max_d = _DURATION_LIMITS.get(
-        account, (settings.min_video_seconds, settings.max_video_seconds)
-    )
+    min_d, max_d = _duration_limits_for(account)
     text_duration = _estimate_duration_from_words(script_text)
     blended = int(round((model_duration * 0.35) + (text_duration * 0.65)))
     return max(min_d, min(max_d, blended))
@@ -612,12 +648,7 @@ def _align_visuals_to_script(
     segments = _split_script_into_segments(script_text, target_count)
 
     # Style hints per account for better prompt generation
-    style_hints = {
-        "terror": "Dark, eerie, horror atmosphere, cinematic shadows, unsettling",
-        "historias": "Cinematic, emotional, dramatic lighting, documentary style",
-        "dinero": "Professional, clean, luxury, business imagery, motivational",
-    }
-    style = style_hints.get(account, "Cinematic, photorealistic")
+    style = _account_config(account).get("image_style") or "Cinematic, photorealistic"
 
     # If we already have some visual prompts from Gemini, interleave them
     # with generated ones to maintain quality
@@ -640,11 +671,9 @@ def _align_visuals_to_script(
 
 def _build_retry_prompt(base_prompt: str, account: str, reasons: list[str], attempt: int) -> str:
     """Tighten instructions when Gemini returns a malformed or truncated script."""
-    min_d, max_d = _DURATION_LIMITS.get(
-        account, (settings.min_video_seconds, settings.max_video_seconds)
-    )
+    min_d, max_d = _duration_limits_for(account)
     max_visuals = min(18, math.ceil(max_d / SECONDS_PER_IMAGE))
-    hook_min_words, hook_max_words = _HOOK_WORD_LIMITS.get(account, (5, 16))
+    hook_min_words, hook_max_words = _hook_word_limits_for(account)
     reason_text = "; ".join(reasons) if reasons else "response incomplete"
 
     return (
@@ -666,11 +695,9 @@ async def generate_script(account: str) -> dict:
     """Generate a video script using Gemini with key+model rotation."""
     prompt_config = _load_prompt_config(account)
     previous_ideas = _get_previous_ideas_compact(account)
-    min_duration, max_duration = _DURATION_LIMITS.get(
-        account, (settings.min_video_seconds, settings.max_video_seconds)
-    )
+    min_duration, max_duration = _duration_limits_for(account)
     max_visuals = min(18, math.ceil(max_duration / SECONDS_PER_IMAGE))
-    hook_min_words, hook_max_words = _HOOK_WORD_LIMITS.get(account, (5, 16))
+    hook_min_words, hook_max_words = _hook_word_limits_for(account)
 
     system_prompt = prompt_config["system_prompt"]
     script_prompt = prompt_config["script_prompt"].format(

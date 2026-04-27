@@ -3,7 +3,7 @@ from pathlib import Path
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from config.settings import settings
+from config.settings import ACCOUNTS, settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,20 @@ def _ensure_folder(service, folder_name: str, parent_id: str = None) -> str:
     return folder["id"]
 
 
+def _drive_query_value(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _find_existing_file(service, file_name: str, parent_id: str) -> dict | None:
+    query = (
+        f"name='{_drive_query_value(file_name)}' and "
+        f"'{_drive_query_value(parent_id)}' in parents and trashed=false"
+    )
+    results = service.files().list(q=query, fields="files(id, webViewLink)").execute()
+    files = results.get("files", [])
+    return files[0] if files else None
+
+
 async def upload_to_drive(video_path: str, account: str, title: str) -> dict:
     """Upload a video to Google Drive in the account's folder.
 
@@ -63,10 +77,10 @@ async def upload_to_drive(video_path: str, account: str, title: str) -> dict:
     """
     service = _get_drive_service()
 
-    # Ensure folder structure: TikTok Videos / {Account}
-    root_folder_id = _ensure_folder(service, "TikTok Videos")
-    account_display = account.capitalize()
-    account_folder_id = _ensure_folder(service, account_display, root_folder_id)
+    account_cfg = ACCOUNTS.get(account, {})
+    root_folder_id = _ensure_folder(service, settings.drive_root_folder)
+    account_display = account_cfg.get("drive_folder_name") or account_cfg.get("display_name") or account.capitalize()
+    account_folder_id = account_cfg.get("drive_folder_id") or _ensure_folder(service, account_display, root_folder_id)
 
     # Upload the video
     file_name = f"{title[:50]}_{Path(video_path).stem}.mp4"
@@ -74,6 +88,14 @@ async def upload_to_drive(video_path: str, account: str, title: str) -> dict:
         "name": file_name,
         "parents": [account_folder_id],
     }
+
+    if settings.drive_dedupe:
+        existing = _find_existing_file(service, file_name, account_folder_id)
+        if existing:
+            file_id = existing["id"]
+            web_link = existing.get("webViewLink", f"https://drive.google.com/file/d/{file_id}/view")
+            logger.info("Drive upload skipped, existing file found: %s", web_link)
+            return {"file_id": file_id, "web_link": web_link}
 
     media = MediaFileUpload(
         video_path,

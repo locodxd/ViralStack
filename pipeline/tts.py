@@ -186,8 +186,9 @@ async def generate_tts(script_text: str, account: str, video_id: int) -> str:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "narration.wav"
 
-    voice = _VOICES.get(account, "orus")
-    fallback_voice = _FALLBACK_VOICES.get(account, "orus")
+    account_cfg = ACCOUNTS.get(account, {})
+    voice = account_cfg.get("voice") or _VOICES.get(account, "orus")
+    fallback_voice = account_cfg.get("voice_fallback_gemini") or _FALLBACK_VOICES.get(account, "orus")
 
     # Try 1: Gemini TTS with primary voice
     try:
@@ -206,6 +207,6 @@ async def generate_tts(script_text: str, account: str, video_id: int) -> str:
     # Try 3: Edge TTS (last resort)
     logger.warning("All Gemini TTS failed, falling back to Edge TTS")
     output_path = output_dir / "narration.mp3"
-    edge_voice = "es-MX-JorgeNeural" if not settings.is_english else "en-US-GuyNeural"
+    edge_voice = account_cfg.get("voice_fallback") or ("es-MX-JorgeNeural" if not settings.is_english else "en-US-GuyNeural")
     await _generate_edge_tts(script_text, edge_voice, output_path)
     return str(output_path)

@@ -85,8 +85,8 @@ def generate_subtitles(audio_path: str, video_id: int, account: str) -> str:
 
     model = WhisperModel(
         settings.whisper_model,
-        device="cpu",
-        compute_type="int8",
+        device=settings.whisper_device,
+        compute_type=settings.whisper_compute_type,
     )
 
     segments, info = model.transcribe(

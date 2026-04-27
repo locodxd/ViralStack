@@ -1,0 +1,30 @@
+{
+  "platforms": {
+    "tiktok": {
+      "display_name": "TikTok",
+      "short_name": "TT",
+      "enabled_by_default": true,
+      "publisher": "builtin:tiktok",
+      "hashtags_key": "hashtags_tiktok",
+      "supports_direct_publish": true
+    },
+    "youtube": {
+      "display_name": "YouTube Shorts",
+      "short_name": "YT",
+      "enabled_by_default": true,
+      "publisher": "builtin:youtube",
+      "hashtags_key": "hashtags_youtube",
+      "supports_direct_publish": true
+    },
+    "instagram": {
+      "display_name": "Instagram Reels",
+      "short_name": "IG",
+      "enabled_by_default": false,
+      "publisher": "webhook",
+      "webhook_url_env": "INSTAGRAM_WEBHOOK_URL",
+      "hashtags_key": "hashtags_instagram",
+      "supports_direct_publish": false,
+      "manual_url_template": "https://www.instagram.com/{account}/"
+    }
+  }
+}

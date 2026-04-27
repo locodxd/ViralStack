@@ -5,9 +5,17 @@ Sends daily summary and real-time alerts through bot channels
 instead of webhooks.
 """
 import logging
+import json
 from datetime import datetime, timedelta
 import discord
-from config.settings import settings, ACCOUNTS, is_platform_enabled
+from config.settings import (
+    ACCOUNTS,
+    enabled_platforms_for,
+    is_platform_enabled,
+    list_account_ids,
+    platform_short_name,
+    settings,
+)
 from core.db import get_session
 from core.models import Video, EmailThread
 
@@ -48,20 +56,40 @@ async def send_daily_stats(bot):
             Video.published_at < today,
         ).count()
 
-        # Platform breakdown
-        today_tiktok = session.query(Video).filter(
+        # Platform breakdown (legacy columns + v1.2 generic JSON)
+        legacy_tiktok = session.query(Video).filter(
             Video.tiktok_published == True,
             Video.published_at >= today,
         ).count()
 
-        today_youtube = session.query(Video).filter(
+        legacy_youtube = session.query(Video).filter(
             Video.youtube_published == True,
             Video.published_at >= today,
         ).count()
 
+        platform_counts = {}
+        platform_rows = session.query(Video.platform_results_json).filter(
+            Video.created_at >= today,
+        ).all()
+        for (raw_results,) in platform_rows:
+            if not raw_results:
+                continue
+            try:
+                results = json.loads(raw_results)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(results, dict):
+                continue
+            for platform, result in results.items():
+                if isinstance(result, dict) and result.get("ok"):
+                    platform_counts[platform] = platform_counts.get(platform, 0) + 1
+
+        platform_counts.setdefault("tiktok", legacy_tiktok)
+        platform_counts.setdefault("youtube", legacy_youtube)
+
         # Per-account breakdown
         account_stats = {}
-        for acc_name in ["terror", "historias", "dinero"]:
+        for acc_name in list_account_ids():
             pub = session.query(Video).filter(
                 Video.account == acc_name,
                 Video.status == "published",
@@ -108,11 +136,11 @@ async def send_daily_stats(bot):
         value=(
             f"Publicados: **{today_published}**{trend}\n"
             f"Fallidos: **{today_failed}**\n"
-            f"TikTok: **{today_tiktok}** | YouTube: **{today_youtube}**\n"
+            f"Plataformas: **{_format_platform_counts(platform_counts)}**\n"
             f"Calidad promedio: **{avg_score:.1f}/10**" if avg_score else
             f"Publicados: **{today_published}**{trend}\n"
             f"Fallidos: **{today_failed}**\n"
-            f"TikTok: **{today_tiktok}** | YouTube: **{today_youtube}**"
+            f"Plataformas: **{_format_platform_counts(platform_counts)}**"
         ),
         inline=False,
     )
@@ -120,14 +148,17 @@ async def send_daily_stats(bot):
     # Per-account
     for acc_name, stats in account_stats.items():
         display = ACCOUNTS.get(acc_name, {}).get("display_name", acc_name)
-        tt = "ON" if is_platform_enabled(acc_name, "tiktok") else "OFF"
-        yt = "ON" if is_platform_enabled(acc_name, "youtube") else "OFF"
+        enabled = enabled_platforms_for(acc_name)
+        platform_line = " | ".join(
+            f"{platform_short_name(platform)}={'ON' if is_platform_enabled(acc_name, platform) else 'OFF'}"
+            for platform in enabled
+        ) or "NINGUNA"
 
         embed.add_field(
             name=display,
             value=(
                 f"Hoy: **{stats['today']}** | Total: **{stats['total']}**\n"
-                f"TikTok={tt} | YouTube={yt}"
+                f"{platform_line}"
             ),
             inline=True,
         )
@@ -147,6 +178,15 @@ async def send_daily_stats(bot):
 
     await bot.send_stats(embed)
     logger.info("Daily stats sent to Discord")
+
+
+def _format_platform_counts(counts: dict) -> str:
+    if not counts:
+        return "0"
+    return " | ".join(
+        f"{platform_short_name(platform)}:{count}"
+        for platform, count in sorted(counts.items())
+    )
 
 
 def build_alert_embed(

@@ -1,5 +1,5 @@
 """
-EasyRun — Visual launcher for the TikTok/YouTube automation pipeline.
+EasyRun — Visual launcher for the ViralStack short-form automation pipeline.
 
 Run:  python easyrun.py
 """
@@ -36,11 +36,27 @@ ACCENT_HOVER_H  = "#1e88e5"
 ACCENT_HOVER_D  = "#388e3c"
 BTN_FG          = "#ffffff"
 
-ACCOUNTS = [
-    ("terror",    "Terror",    ACCENT_TERROR,   ACCENT_HOVER_T),
-    ("historias", "Historias", ACCENT_HISTORIA, ACCENT_HOVER_H),
-    ("dinero",    "Dinero",    ACCENT_DINERO,   ACCENT_HOVER_D),
+ACCOUNT_COLORS = [
+    (ACCENT_TERROR, ACCENT_HOVER_T),
+    (ACCENT_HISTORIA, ACCENT_HOVER_H),
+    (ACCENT_DINERO, ACCENT_HOVER_D),
+    ("#6a4c93", "#7b5faf"),
+    ("#006d77", "#168994"),
 ]
+
+
+def _load_accounts():
+    from config.settings import ACCOUNTS as CONFIG_ACCOUNTS, list_account_ids
+
+    accounts = []
+    for index, account in enumerate(list_account_ids()):
+        color, hover = ACCOUNT_COLORS[index % len(ACCOUNT_COLORS)]
+        label = CONFIG_ACCOUNTS.get(account, {}).get("display_name", account.title())
+        accounts.append((account, label, color, hover))
+    return accounts
+
+
+ACCOUNTS = _load_accounts()
 
 # ── Queue-based log handler ────────────────────────────────
 class QueueHandler(logging.Handler):
@@ -94,7 +110,7 @@ def _run_pipeline(account: str, log_queue: queue.Queue, done_event: threading.Ev
 class EasyRunApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("EasyRun — TikTok & YouTube Automation")
+        self.root.title("EasyRun — ViralStack Automation")
         self.root.configure(bg=BG)
         self.root.geometry("920x660")
         self.root.minsize(720, 500)
@@ -129,7 +145,7 @@ class EasyRunApp:
             fg=FG, bg=BG,
         ).pack()
         tk.Label(
-            header, text="TikTok & YouTube Shorts Automation",
+            header, text="Short-form Automation",
             font=("Segoe UI", 10), fg=FG_DIM, bg=BG,
         ).pack()
 

@@ -10,10 +10,10 @@ from email_agent import gmail_client, thread_tracker
 logger = logging.getLogger(__name__)
 
 # ---- English prompts ----
-_SPONSOR_PROMPT_EN = """You are the manager of a TikTok & YouTube Shorts content creator. Reply to this potential sponsor's email.
+_SPONSOR_PROMPT_EN = """You are the manager of a short-form video content creator. Reply to this potential sponsor's email.
 
 CONTEXT:
-- We are a viral content channel on TikTok and YouTube Shorts
+- We are a viral short-form content channel across the platforms we operate
 - Our rates:
   * 15-second mention: ${mencion_15s} USD
   * Dedicated video: ${video_dedicado} USD
@@ -36,7 +36,7 @@ Write a professional response that:
 
 Only return the response text."""
 
-_COLLAB_PROMPT_EN = """You are a TikTok & YouTube Shorts content creator. Reply to this fellow creator who wants to collaborate.
+_COLLAB_PROMPT_EN = """You are a short-form video content creator. Reply to this fellow creator who wants to collaborate.
 
 PREVIOUS THREAD:
 {thread_context}
@@ -61,10 +61,10 @@ I really appreciate that you enjoy the content. Comments like yours are what mot
 See you in the next video! Don't forget to follow so you don't miss anything."""
 
 # ---- Spanish prompts ----
-_SPONSOR_PROMPT_ES = """Eres el manager de un creador de contenido en TikTok y YouTube Shorts. Responde a este email de un sponsor potencial.
+_SPONSOR_PROMPT_ES = """Eres el manager de un creador de contenido short-form. Responde a este email de un sponsor potencial.
 
 CONTEXTO:
-- Somos un canal de contenido viral en TikTok y YouTube Shorts
+- Somos un canal de contenido viral short-form en las plataformas donde operamos
 - Nuestras tarifas son:
   * Mención de 15 segundos: ${mencion_15s} USD
   * Video dedicado: ${video_dedicado} USD
@@ -87,7 +87,7 @@ Escribe una respuesta profesional en español que:
 
 Solo devuelve el texto de la respuesta."""
 
-_COLLAB_PROMPT_ES = """Eres un creador de contenido en TikTok y YouTube Shorts. Responde a este email de otro creador que quiere colaborar.
+_COLLAB_PROMPT_ES = """Eres un creador de contenido short-form. Responde a este email de otro creador que quiere colaborar.
 
 HILO PREVIO:
 {thread_context}

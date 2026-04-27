@@ -24,7 +24,7 @@ from pathlib import Path
 # Add project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.settings import settings
+from config.settings import get_gmail_token_path_for, list_account_ids, settings
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -32,14 +32,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
-VALID_ACCOUNTS = ["terror", "historias", "dinero"]
-
-
 def setup(account: str):
     """Run Gmail OAuth flow for a specific account."""
-    if account not in VALID_ACCOUNTS:
+    valid_accounts = list_account_ids()
+    if account not in valid_accounts:
         print(f"Error: cuenta invalida '{account}'")
-        print(f"Cuentas validas: {', '.join(VALID_ACCOUNTS)}")
+        print(f"Cuentas validas: {', '.join(valid_accounts)}")
+        print("Para agregar una cuenta, crea config/accounts.json y vuelve a ejecutar este script.")
         sys.exit(1)
 
     client_id = settings.gmail_client_id
@@ -56,7 +55,7 @@ def setup(account: str):
         print("6. Copia el Client ID y Client Secret al .env")
         sys.exit(1)
 
-    token_path = Path(settings.get_gmail_token_path(account))
+    token_path = Path(get_gmail_token_path_for(account))
 
     client_config = {
         "installed": {
@@ -93,7 +92,7 @@ def setup(account: str):
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Uso: python scripts/setup_gmail.py <cuenta>")
-        print(f"Cuentas validas: {', '.join(VALID_ACCOUNTS)}")
+        print(f"Cuentas validas: {', '.join(list_account_ids())}")
         print("\nEjemplo:")
         print("  python scripts/setup_gmail.py terror")
         print("  python scripts/setup_gmail.py historias")

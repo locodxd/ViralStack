@@ -12,7 +12,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from config.settings import settings, ACCOUNTS
+from config.settings import ACCOUNTS, get_youtube_token_path_for, settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ _CATEGORY_IDS = {
 
 def _get_youtube_credentials(account: str) -> Credentials:
     """Get or refresh YouTube OAuth credentials for an account."""
-    token_path = Path(settings.get_youtube_token_path(account))
+    token_path = Path(get_youtube_token_path_for(account))
 
     if not token_path.exists():
         raise FileNotFoundError(
@@ -72,7 +72,7 @@ async def publish_to_youtube(
     account_config = ACCOUNTS.get(account, {})
     default_hashtags = account_config.get("hashtags_youtube", [])
 
-    all_hashtags = list(set((hashtags or []) + default_hashtags))
+    all_hashtags = _merge_hashtags(hashtags or [], default_hashtags)
     # Ensure #shorts is always present for YouTube Shorts detection
     if "#shorts" not in [h.lower() for h in all_hashtags]:
         all_hashtags.insert(0, "#Shorts")
@@ -95,7 +95,7 @@ async def publish_to_youtube(
         yt_title = f"{yt_title} #Shorts"
     yt_title = yt_title[:100]
 
-    category_id = _CATEGORY_IDS.get(account, "24")
+    category_id = str(account_config.get("youtube_category_id") or _CATEGORY_IDS.get(account, "24"))
 
     # Default language based on system config
     default_lang = "es" if not settings.is_english else "en"
@@ -161,3 +161,22 @@ def _execute_resumable_upload(request) -> dict:
         if status:
             logger.debug("YouTube upload progress: %.1f%%", status.progress() * 100)
     return response
+
+
+def _merge_hashtags(*groups: list) -> list[str]:
+    """Merge hashtags while preserving order and normalizing # prefixes."""
+    merged = []
+    seen = set()
+    for group in groups:
+        for raw in group or []:
+            tag = str(raw).strip()
+            if not tag:
+                continue
+            if not tag.startswith("#"):
+                tag = f"#{tag}"
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(tag)
+    return merged

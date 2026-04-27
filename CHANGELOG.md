@@ -1,5 +1,31 @@
 ﻿# Changelog
 
+## v1.2.0 - 2026-04-27
+
+### New features
+
+- **Platform registry**: `config/platform_registry.json` defines publish targets. TikTok and YouTube remain built-in; Instagram Reels is registered as a webhook/manual platform and disabled by default.
+- **Generic platform publishing**: new dispatcher in `pipeline/platform_publishers.py` stores per-platform results, errors, URLs, and skipped states without adding new columns for every platform.
+- **Dashboard platform controls**: new Platforms tab to enable/disable any registered platform per account.
+- **Custom-account template**: `config/accounts.example.json` documents per-account voice, prompt, thresholds, hashtags, image style, paths, and platform toggles.
+- **Generic platform stats**: dashboard, health, audit payloads, and Discord stats now include dynamic platform data.
+
+### Bug fixes
+
+- Fixed custom YouTube/Gmail token resolution; setup scripts now accept any registered account.
+- Fixed Gmail polling and Discord stats loops that still only handled `terror`, `historias`, and `dinero`.
+- Fixed per-account quality thresholds so lower custom thresholds are honored after quality review.
+- Removed duplicate DB backup scheduler registration in `main.py`.
+- Replaced hardcoded Drive root folder (`TikTok Videos`) with `DRIVE_ROOT_FOLDER` and optional dedupe.
+- Honored configured Whisper device/compute type, subtitle colors, music/narration volume, crossfade duration, Ken Burns zoom/pan/fps, TTS voices, and account image styles.
+- Added SQLite auto-migration for v1.2 platform JSON columns.
+
+### Compatibility
+
+- Existing `tiktok_*` and `youtube_*` DB columns are preserved for old dashboards/scripts.
+- Existing `config/platforms.json` is normalized to include new registered platforms with safe defaults.
+- `publisher: "webhook"` platforms can be added without changing the scheduler or orchestrator.
+
 ## v1.1.0 â€” 2026-04-23
 
 ### ðŸŽ‰ New features

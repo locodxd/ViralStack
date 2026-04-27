@@ -1,7 +1,7 @@
 """
 Gmail API client with per-account OAuth2 support.
 
-Each of the 3 accounts (terror, historias, dinero) has its own Gmail
+Each registered account can have its own Gmail
 OAuth token, allowing independent email management per account.
 """
 import base64
@@ -12,7 +12,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from config.settings import settings
+from config.settings import get_gmail_token_path_for, list_account_ids
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ SCOPES = [
 
 def _get_credentials(account: str) -> Credentials:
     """Get or refresh Gmail OAuth credentials for a specific account."""
-    token_path = Path(settings.get_gmail_token_path(account))
+    token_path = Path(get_gmail_token_path_for(account))
     creds = None
 
     if token_path.exists():
@@ -206,7 +206,7 @@ async def poll_and_process_account(account: str):
 
 async def poll_and_process():
     """Poll all accounts for new emails. Called by scheduler."""
-    for account in ["terror", "historias", "dinero"]:
+    for account in list_account_ids():
         try:
             await poll_and_process_account(account)
         except Exception as e:

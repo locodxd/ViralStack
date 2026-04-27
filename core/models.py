@@ -42,6 +42,9 @@ class Video(Base):
     youtube_published = Column(Boolean, default=False)
     tiktok_enabled = Column(Boolean, default=True)   # per-video toggle
     youtube_enabled = Column(Boolean, default=True)   # per-video toggle
+    platforms_enabled_json = Column(Text)             # JSON dict: platform -> bool
+    platform_results_json = Column(Text)              # JSON dict: platform -> result metadata
+    platform_errors_json = Column(Text)               # JSON dict: platform -> last error
 
     retry_count = Column(Integer, default=0)
     error_message = Column(Text)

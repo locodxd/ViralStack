@@ -1,23 +1,74 @@
 """
-ViralStack v1.1 — Centralized configuration.
+ViralStack v1.2 — Centralized configuration.
 
 Everything in this file can be overridden via the .env file.
 See `.env.example` for the full list of available knobs.
 """
+from __future__ import annotations
+
 import json
 import os
 import random
+import re
 import tempfile
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from typing import List, Optional
+from typing import Any, List
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PLATFORMS_FILE = BASE_DIR / "config" / "platforms.json"
+PLATFORM_REGISTRY_FILE = BASE_DIR / "config" / "platform_registry.json"
 ACCOUNTS_FILE = BASE_DIR / "config" / "accounts.json"
 BLACKOUT_FILE = BASE_DIR / "config" / "blackout_dates.json"
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+
+DEFAULT_BUILTIN_ACCOUNTS = ["terror", "historias", "dinero"]
+
+DEFAULT_PLATFORM_REGISTRY: dict[str, dict[str, Any]] = {
+    "tiktok": {
+        "display_name": "TikTok",
+        "short_name": "TT",
+        "enabled_by_default": True,
+        "publisher": "builtin:tiktok",
+        "hashtags_key": "hashtags_tiktok",
+        "url_field": "tiktok_url",
+        "published_field": "tiktok_published",
+        "enabled_field": "tiktok_enabled",
+        "supports_direct_publish": True,
+    },
+    "youtube": {
+        "display_name": "YouTube Shorts",
+        "short_name": "YT",
+        "enabled_by_default": True,
+        "publisher": "builtin:youtube",
+        "hashtags_key": "hashtags_youtube",
+        "url_field": "youtube_url",
+        "published_field": "youtube_published",
+        "enabled_field": "youtube_enabled",
+        "supports_direct_publish": True,
+    },
+    "instagram": {
+        "display_name": "Instagram Reels",
+        "short_name": "IG",
+        "enabled_by_default": False,
+        "publisher": "webhook",
+        "webhook_url_env": "INSTAGRAM_WEBHOOK_URL",
+        "hashtags_key": "hashtags_instagram",
+        "supports_direct_publish": False,
+        "manual_url_template": "https://www.instagram.com/{account}/",
+    },
+}
+
+
+def resolve_project_path(path: str | os.PathLike | None) -> str:
+    """Resolve a user-configured path relative to the project root."""
+    if not path:
+        return ""
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(BASE_DIR / candidate)
 
 
 class Settings(BaseSettings):
@@ -81,6 +132,11 @@ class Settings(BaseSettings):
     tiktok_terror_cookies: str = str(BASE_DIR / "storage" / "cookies" / "terror_cookies.txt")
     tiktok_historias_cookies: str = str(BASE_DIR / "storage" / "cookies" / "historias_cookies.txt")
     tiktok_dinero_cookies: str = str(BASE_DIR / "storage" / "cookies" / "dinero_cookies.txt")
+
+    # Generic / webhook platforms (v1.2)
+    # Instagram can be connected through a webhook automation (Make/Zapier/custom API).
+    instagram_webhook_url: str = ""
+    platform_webhook_timeout_seconds: int = 120
 
     # General
     db_path: str = str(BASE_DIR / "storage" / "viralstack.db")
@@ -265,7 +321,14 @@ class Settings(BaseSettings):
 
     def quality_threshold_for(self, account: str) -> float:
         """Return per-account quality threshold or fall back to global."""
-        per_account = getattr(self, f"quality_threshold_{account}", 0.0) or 0.0
+        account_cfg = globals().get("ACCOUNTS", {}).get(account, {})
+        per_account = account_cfg.get("quality_threshold")
+        if per_account is None:
+            per_account = getattr(self, f"quality_threshold_{account}", 0.0) or 0.0
+        try:
+            per_account = float(per_account)
+        except (TypeError, ValueError):
+            per_account = 0.0
         return per_account if per_account > 0 else self.quality_threshold
 
     def get_cookies_path(self, account: str) -> str:
@@ -274,7 +337,9 @@ class Settings(BaseSettings):
             "historias": self.tiktok_historias_cookies,
             "dinero": self.tiktok_dinero_cookies,
         }
-        return mapping.get(account, "")
+        return resolve_project_path(
+            mapping.get(account) or BASE_DIR / "storage" / "cookies" / f"{account}_cookies.txt"
+        )
 
     def get_youtube_token_path(self, account: str) -> str:
         mapping = {
@@ -282,7 +347,9 @@ class Settings(BaseSettings):
             "historias": self.youtube_historias_token,
             "dinero": self.youtube_dinero_token,
         }
-        return mapping.get(account, "")
+        return resolve_project_path(
+            mapping.get(account) or BASE_DIR / "config" / f"youtube_{account}_token.json"
+        )
 
     def get_gmail_token_path(self, account: str) -> str:
         mapping = {
@@ -290,7 +357,9 @@ class Settings(BaseSettings):
             "historias": self.gmail_historias_token,
             "dinero": self.gmail_dinero_token,
         }
-        return mapping.get(account, "")
+        return resolve_project_path(
+            mapping.get(account) or BASE_DIR / "config" / f"gmail_{account}_token.json"
+        )
 
     class Config:
         env_file = str(BASE_DIR / ".env")
@@ -301,8 +370,9 @@ settings = Settings()
 
 
 # ============================================================
-# PLATFORM TOGGLES — per account, per platform
-# Editable via Discord bot commands
+# PLATFORM REGISTRY + TOGGLES — per account, per platform
+# Editable via dashboard / Discord. New platforms can be added in
+# config/platform_registry.json without changing the scheduler or pipeline.
 # ============================================================
 
 
@@ -327,26 +397,151 @@ def _atomic_write_json(path: Path, data) -> None:
         raise
 
 
-def load_platform_config() -> dict:
-    """Load platform toggles from JSON file."""
-    if PLATFORMS_FILE.exists():
+def _normalize_platform_id(platform: str) -> str:
+    """Normalize platform ids used in config files and API routes."""
+    return re.sub(r"[^a-z0-9_]+", "_", (platform or "").strip().lower()).strip("_")
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
+
+
+def _env_value(name: str | None) -> str:
+    if not name:
+        return ""
+    return os.getenv(name, getattr(settings, name.lower(), "") or "")
+
+
+def _normalize_platform_entry(platform: str, info: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(info or {})
+    normalized["id"] = platform
+    normalized.setdefault("display_name", platform.replace("_", " ").title())
+    normalized.setdefault("short_name", platform[:2].upper())
+    normalized["enabled_by_default"] = _coerce_bool(
+        normalized.get("enabled_by_default"), False,
+    )
+    normalized.setdefault("publisher", "manual")
+    normalized.setdefault("hashtags_key", f"hashtags_{platform}")
+    normalized["supports_direct_publish"] = _coerce_bool(
+        normalized.get("supports_direct_publish"),
+        str(normalized.get("publisher", "")).startswith("builtin:"),
+    )
+    return normalized
+
+
+def load_platform_registry() -> dict[str, dict[str, Any]]:
+    """Load known platforms, merging defaults with config/platform_registry.json."""
+    registry: dict[str, dict[str, Any]] = {
+        key: dict(value) for key, value in DEFAULT_PLATFORM_REGISTRY.items()
+    }
+
+    if PLATFORM_REGISTRY_FILE.exists():
         try:
-            data = json.loads(PLATFORMS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(PLATFORM_REGISTRY_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return data
+                raw_platforms = data.get("platforms", data)
+                if isinstance(raw_platforms, dict):
+                    for raw_id, raw_info in raw_platforms.items():
+                        platform = _normalize_platform_id(raw_id)
+                        if not platform or not isinstance(raw_info, dict):
+                            continue
+                        merged = dict(registry.get(platform, {}))
+                        merged.update(raw_info)
+                        registry[platform] = merged
         except (json.JSONDecodeError, OSError):
             pass
-    return _build_default_platforms()
+
+    return {
+        platform: _normalize_platform_entry(platform, info)
+        for platform, info in registry.items()
+    }
+
+
+def list_platform_ids() -> List[str]:
+    """All platforms known by the current registry."""
+    return list(load_platform_registry().keys())
+
+
+def get_platform_info(platform: str) -> dict[str, Any]:
+    """Return registry metadata for a platform id, or an empty dict."""
+    normalized = _normalize_platform_id(platform)
+    return load_platform_registry().get(normalized, {})
+
+
+def is_platform_supported(platform: str) -> bool:
+    return bool(get_platform_info(platform))
+
+
+def platform_display_name(platform: str) -> str:
+    info = get_platform_info(platform)
+    return info.get("display_name") or platform.replace("_", " ").title()
+
+
+def platform_short_name(platform: str) -> str:
+    info = get_platform_info(platform)
+    return info.get("short_name") or platform[:2].upper()
+
+
+def platform_hashtags_for(account: str, platform: str) -> list[str]:
+    """Resolve account hashtags for a platform with sensible fallbacks."""
+    cfg = ACCOUNTS.get(account, {}) if "ACCOUNTS" in globals() else {}
+    info = get_platform_info(platform)
+    keys = [
+        info.get("hashtags_key"),
+        f"hashtags_{_normalize_platform_id(platform)}",
+        "hashtags",
+        "hashtags_tiktok",
+    ]
+    for key in keys:
+        if key and cfg.get(key):
+            return list(cfg.get(key) or [])
+    return []
+
+
+def platform_webhook_url(platform: str) -> str:
+    """Resolve a webhook URL configured for a platform, if any."""
+    info = get_platform_info(platform)
+    return (
+        info.get("webhook_url")
+        or _env_value(info.get("webhook_url_env"))
+        or ""
+    )
+
+
+def load_platform_config() -> dict:
+    """Load platform toggles from JSON file and normalize missing accounts/platforms."""
+    data = {}
+    if PLATFORMS_FILE.exists():
+        try:
+            loaded = json.loads(PLATFORMS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    return _normalize_platform_config(data)
 
 
 def save_platform_config(config: dict):
     """Save platform toggles to JSON file (atomic write)."""
-    _atomic_write_json(PLATFORMS_FILE, config)
+    _atomic_write_json(PLATFORMS_FILE, _normalize_platform_config(config))
 
 
 def _build_default_platforms() -> dict:
     """Build default platforms dict from registered accounts."""
-    return {acc: {"tiktok": True, "youtube": True} for acc in _registered_accounts()}
+    registry = load_platform_registry()
+    return {
+        acc: {
+            platform: bool(info.get("enabled_by_default", False))
+            for platform, info in registry.items()
+        }
+        for acc in _registered_accounts()
+    }
 
 
 def _registered_accounts() -> list:
@@ -354,20 +549,85 @@ def _registered_accounts() -> list:
     try:
         return list(ACCOUNTS.keys())
     except NameError:
-        return ["terror", "historias", "dinero"]
+        return list(DEFAULT_BUILTIN_ACCOUNTS)
+
+
+def _normalize_platform_config(data: dict | None) -> dict:
+    """Ensure every account has every known platform toggle."""
+    registry = load_platform_registry()
+    defaults = {
+        platform: bool(info.get("enabled_by_default", False))
+        for platform, info in registry.items()
+    }
+    data = data if isinstance(data, dict) else {}
+    account_ids = list(dict.fromkeys([*_registered_accounts(), *data.keys()]))
+    normalized = {}
+
+    for account in account_ids:
+        account_cfg = dict(defaults)
+        if "ACCOUNTS" in globals():
+            account_meta = ACCOUNTS.get(account, {})
+            declared = account_meta.get("platforms")
+            if isinstance(declared, dict):
+                for raw_platform, raw_enabled in declared.items():
+                    platform = _normalize_platform_id(raw_platform)
+                    if platform in registry:
+                        account_cfg[platform] = _coerce_bool(raw_enabled, account_cfg.get(platform, False))
+
+        raw_toggles = data.get(account, {})
+        if isinstance(raw_toggles, dict):
+            for raw_platform, raw_enabled in raw_toggles.items():
+                platform = _normalize_platform_id(raw_platform)
+                if not platform:
+                    continue
+                if platform not in registry:
+                    continue
+                account_cfg[platform] = _coerce_bool(raw_enabled, account_cfg.get(platform, False))
+
+        normalized[account] = account_cfg
+
+    return normalized
+
+
+def ensure_platform_config() -> dict:
+    """Create or refresh platforms.json when registry/accounts changed."""
+    current = {}
+    if PLATFORMS_FILE.exists():
+        try:
+            loaded = json.loads(PLATFORMS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                current = loaded
+        except (json.JSONDecodeError, OSError):
+            current = {}
+    normalized = _normalize_platform_config(current)
+    if normalized != current:
+        save_platform_config(normalized)
+    return normalized
 
 
 def is_platform_enabled(account: str, platform: str) -> bool:
     """Check if a platform is enabled for an account."""
+    platform = _normalize_platform_id(platform)
+    if not is_platform_supported(platform):
+        return False
     config = load_platform_config()
-    return config.get(account, {}).get(platform, True)
+    default = bool(get_platform_info(platform).get("enabled_by_default", False))
+    return bool(config.get(account, {}).get(platform, default))
+
+
+def enabled_platforms_for(account: str) -> list[str]:
+    """Return platform ids enabled for an account, in registry order."""
+    return [platform for platform in list_platform_ids() if is_platform_enabled(account, platform)]
 
 
 def toggle_platform(account: str, platform: str, enabled: bool) -> dict:
     """Toggle a platform for an account. Returns updated config."""
+    platform = _normalize_platform_id(platform)
+    if not is_platform_supported(platform):
+        raise ValueError(f"Unsupported platform: {platform}")
     config = load_platform_config()
     if account not in config:
-        config[account] = {"tiktok": True, "youtube": True}
+        config[account] = _build_default_platforms().get(account, {})
     config[account][platform] = bool(enabled)
     save_platform_config(config)
     return config
@@ -387,11 +647,6 @@ def load_blackout_dates() -> list:
 
 def save_blackout_dates(dates: list) -> None:
     _atomic_write_json(BLACKOUT_FILE, sorted(set(str(d) for d in dates)))
-
-
-# Initialize platforms.json if it doesn't exist
-if not PLATFORMS_FILE.exists():
-    save_platform_config(_build_default_platforms())
 
 
 # ============================================================
@@ -529,6 +784,90 @@ _ACCOUNT_BASE = {
     },
 }
 
+_ACCOUNT_COMMON_DEFAULTS = {
+    "min_words": 80,
+    "max_words": 240,
+    "duration_min_seconds": settings.min_video_seconds,
+    "duration_max_seconds": settings.max_video_seconds,
+    "hook_min_words": 5,
+    "hook_max_words": 16,
+    "quality_threshold": 0.0,
+    "image_style": "Cinematic, photorealistic, detailed, vertical 9:16 composition",
+    "image_style_fallback": "Photorealistic cinematic vertical scene",
+    "emergency_color": "0x1C1C1C",
+    "apply_horror_filter": False,
+    "youtube_category_id": "24",
+    "drive_folder_name": None,
+    "platforms": {},
+}
+
+_ACCOUNT_V12_OVERRIDES = {
+    "terror": {
+        "min_words": 85,
+        "max_words": 240,
+        "hook_min_words": 5,
+        "hook_max_words": 14,
+        "image_style": (
+            "Dark horror atmosphere, eerie shadows, dim cold lighting, "
+            "desaturated colors with blue-green tint, fog, cinematic horror movie style, "
+            "high contrast, photorealistic, 9:16 vertical composition"
+        ),
+        "image_style_fallback": (
+            "Abandoned room, ominous silhouette, eerie shadows, cinematic horror, "
+            "photorealistic, vertical 9:16"
+        ),
+        "emergency_color": "0x11171F",
+        "apply_horror_filter": True,
+        "youtube_category_id": "24",
+    },
+    "historias": {
+        "min_words": 80,
+        "max_words": 240,
+        "hook_min_words": 6,
+        "hook_max_words": 16,
+        "image_style": (
+            "Cinematic storytelling atmosphere, warm dramatic lighting, "
+            "emotional and immersive, photorealistic, detailed textures, "
+            "documentary style, 9:16 vertical composition"
+        ),
+        "image_style_fallback": (
+            "Real-life dramatic moment, emotional storytelling, cinematic, "
+            "photorealistic, vertical 9:16"
+        ),
+        "emergency_color": "0x2B211C",
+        "youtube_category_id": "24",
+    },
+    "dinero": {
+        "min_words": 80,
+        "max_words": 250,
+        "hook_min_words": 5,
+        "hook_max_words": 15,
+        "image_style": (
+            "Modern professional aesthetic, clean composition, "
+            "luxury and success imagery, bright motivational lighting, "
+            "business and finance visuals, photorealistic, 9:16 vertical composition"
+        ),
+        "image_style_fallback": (
+            "Modern finance success scene, clean composition, cinematic, "
+            "photorealistic, vertical 9:16"
+        ),
+        "emergency_color": "0x182328",
+        "youtube_category_id": "27",
+    },
+}
+
+
+def _merge_account_defaults(account: str, config: dict) -> dict:
+    """Apply v1.2 account defaults while preserving user-provided fields."""
+    merged = dict(_ACCOUNT_COMMON_DEFAULTS)
+    merged.update(_ACCOUNT_V12_OVERRIDES.get(account, {}))
+    merged.update(config or {})
+    if not merged.get("hashtags_instagram"):
+        merged["hashtags_instagram"] = list(
+            merged.get("hashtags_tiktok") or merged.get("hashtags") or ["#reels", "#viral"]
+        )
+    return merged
+
 # Videos per day per account from .env
 _VPD = {
     "terror": max(0, min(6, settings.videos_per_day_terror)),
@@ -540,7 +879,7 @@ _VPD = {
 _lang = "en" if settings.is_english else "es"
 ACCOUNTS = {}
 for _acc, _vpd in _VPD.items():
-    _cfg = _ACCOUNT_BASE[_lang][_acc].copy()
+    _cfg = _merge_account_defaults(_acc, _ACCOUNT_BASE[_lang][_acc].copy())
     _cfg["videos_per_day"] = _vpd
     _cfg["schedule_windows"] = _generate_schedule_windows(_vpd)
     # Backwards-compatible "hashtags" key (uses tiktok hashtags by default)
@@ -586,26 +925,31 @@ def _load_custom_accounts() -> None:
     for entry in data:
         if not isinstance(entry, dict):
             continue
-        acc_id = (entry.get("id") or "").strip().lower()
+        acc_id = re.sub(r"[^a-z0-9_]+", "_", (entry.get("id") or "").strip().lower()).strip("_")
         if not acc_id or acc_id in ACCOUNTS:
             continue
-        vpd = max(0, min(6, int(entry.get("videos_per_day", 1))))
-        cfg = {
-            "display_name": entry.get("display_name", acc_id.title()),
-            "description": entry.get("description", ""),
-            "voice": entry.get("voice", "kore"),
-            "voice_fallback": entry.get("voice_fallback", "es-MX-JorgeNeural"),
-            "music_mood": entry.get("music_mood", "motivational"),
-            "hashtags_tiktok": entry.get("hashtags_tiktok") or ["#fyp", "#viral"],
-            "hashtags_youtube": entry.get("hashtags_youtube") or ["#shorts", "#viral"],
-            "videos_per_day": vpd,
-            "schedule_windows": _generate_schedule_windows(vpd),
-            "youtube_token_path": entry.get("youtube_token_path"),
-            "tiktok_cookies_path": entry.get("tiktok_cookies_path"),
-            "gmail_token_path": entry.get("gmail_token_path"),
-            "prompt_file": entry.get("prompt_file"),
-            "is_custom": True,
-        }
+        try:
+            vpd = max(0, min(6, int(entry.get("videos_per_day", 1))))
+        except (TypeError, ValueError):
+            vpd = 1
+
+        cfg = _merge_account_defaults(acc_id, dict(entry))
+        cfg.pop("id", None)
+        cfg.setdefault("display_name", acc_id.title())
+        cfg.setdefault("description", "")
+        cfg.setdefault("voice", "kore")
+        cfg.setdefault("voice_fallback", "en-US-GuyNeural" if settings.is_english else "es-MX-JorgeNeural")
+        cfg.setdefault("music_mood", "motivational")
+        cfg["hashtags_tiktok"] = list(cfg.get("hashtags_tiktok") or cfg.get("hashtags") or ["#fyp", "#viral"])
+        cfg["hashtags_youtube"] = list(cfg.get("hashtags_youtube") or ["#shorts", "#viral"])
+        cfg["hashtags_instagram"] = list(cfg.get("hashtags_instagram") or cfg["hashtags_tiktok"])
+        cfg["videos_per_day"] = vpd
+        cfg["schedule_windows"] = (
+            cfg.get("schedule_windows")
+            if isinstance(cfg.get("schedule_windows"), list)
+            else _generate_schedule_windows(vpd)
+        )
+        cfg["is_custom"] = True
         cfg["hashtags"] = cfg["hashtags_tiktok"]
         ACCOUNTS[acc_id] = cfg
 
@@ -618,7 +962,7 @@ def get_cookies_path_for(account: str) -> str:
     cfg = ACCOUNTS.get(account, {})
     custom = cfg.get("tiktok_cookies_path")
     if custom:
-        return str(custom)
+        return resolve_project_path(custom)
     return settings.get_cookies_path(account)
 
 
@@ -626,7 +970,7 @@ def get_youtube_token_path_for(account: str) -> str:
     cfg = ACCOUNTS.get(account, {})
     custom = cfg.get("youtube_token_path")
     if custom:
-        return str(custom)
+        return resolve_project_path(custom)
     return settings.get_youtube_token_path(account)
 
 
@@ -634,13 +978,16 @@ def get_gmail_token_path_for(account: str) -> str:
     cfg = ACCOUNTS.get(account, {})
     custom = cfg.get("gmail_token_path")
     if custom:
-        return str(custom)
+        return resolve_project_path(custom)
     return settings.get_gmail_token_path(account)
 
 
 def list_account_ids() -> List[str]:
     """All account ids currently registered (built-in + custom)."""
     return list(ACCOUNTS.keys())
+
+
+ensure_platform_config()
 
 # Whisper language code
 WHISPER_LANG = "en" if settings.is_english else "es"

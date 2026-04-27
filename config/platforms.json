@@ -1,14 +1,17 @@
 {
   "terror": {
     "tiktok": true,
-    "youtube": true
+    "youtube": true,
+    "instagram": false
   },
   "historias": {
     "tiktok": true,
-    "youtube": true
+    "youtube": true,
+    "instagram": false
   },
   "dinero": {
     "tiktok": true,
-    "youtube": true
+    "youtube": true,
+    "instagram": false
   }
 }

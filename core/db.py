@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import text
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
@@ -37,7 +38,24 @@ def init_db():
     """Create all tables if they don't exist."""
     from core.models import Base
     Base.metadata.create_all(bind=engine)
+    _ensure_v12_schema()
     logger.info("Database initialized at %s", settings.db_path)
+
+
+def _ensure_v12_schema() -> None:
+    """Add nullable v1.2 columns when an existing SQLite DB predates them."""
+    additions = {
+        "platforms_enabled_json": "TEXT",
+        "platform_results_json": "TEXT",
+        "platform_errors_json": "TEXT",
+    }
+    with engine.begin() as connection:
+        rows = connection.execute(text("PRAGMA table_info(videos)")).fetchall()
+        existing = {row[1] for row in rows}
+        for column, column_type in additions.items():
+            if column not in existing:
+                logger.info("Adding missing videos.%s column", column)
+                connection.execute(text(f"ALTER TABLE videos ADD COLUMN {column} {column_type}"))
 
 
 @contextmanager

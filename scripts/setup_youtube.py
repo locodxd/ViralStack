@@ -18,23 +18,23 @@ Prerequisites:
 4. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in .env
 """
 import sys
-import json
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.settings import settings
+from config.settings import get_youtube_token_path_for, list_account_ids, settings
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-VALID_ACCOUNTS = ["terror", "historias", "dinero"]
 
 
 def setup_youtube(account: str):
     """Run the OAuth flow for a YouTube account."""
-    if account not in VALID_ACCOUNTS:
+    valid_accounts = list_account_ids()
+    if account not in valid_accounts:
         print(f"Error: cuenta invalida '{account}'")
-        print(f"Cuentas validas: {', '.join(VALID_ACCOUNTS)}")
+        print(f"Cuentas validas: {', '.join(valid_accounts)}")
+        print("Para agregar una cuenta, crea config/accounts.json y vuelve a ejecutar este script.")
         sys.exit(1)
 
     client_id = settings.youtube_client_id
@@ -51,7 +51,7 @@ def setup_youtube(account: str):
         print("6. Copia el Client ID y Client Secret al .env")
         sys.exit(1)
 
-    token_path = Path(settings.get_youtube_token_path(account))
+    token_path = Path(get_youtube_token_path_for(account))
 
     # Build client config
     client_config = {
@@ -107,7 +107,7 @@ def setup_youtube(account: str):
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Uso: python scripts/setup_youtube.py <cuenta>")
-        print(f"Cuentas validas: {', '.join(VALID_ACCOUNTS)}")
+        print(f"Cuentas validas: {', '.join(list_account_ids())}")
         print("\nEjemplo:")
         print("  python scripts/setup_youtube.py terror")
         print("  python scripts/setup_youtube.py historias")

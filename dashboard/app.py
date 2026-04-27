@@ -1,6 +1,6 @@
-"""ViralStack v1.1 dashboard.
+"""ViralStack v1.2 dashboard.
 
-Adds optional API-key auth, CORS, GZip, /health, and a richer admin API.
+Adds optional API-key auth, CORS, GZip, /health, platform controls, and admin APIs.
 """
 from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles

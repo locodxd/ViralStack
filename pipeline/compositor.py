@@ -7,7 +7,7 @@ Features:
 - Background music mixing at low volume under narration
 - Styled subtitle burning
 - Each image is unique (no looping) — aligned to script chronologically
-- Compressed output optimized for TikTok/YouTube Shorts
+- Compressed output optimized for vertical short-form platforms
 - Lightweight review copy for Gemini quality check
 """
 import logging
@@ -18,7 +18,7 @@ import random
 import shutil
 import subprocess
 from pathlib import Path
-from config.settings import settings
+from config.settings import ACCOUNTS, BASE_DIR, resolve_project_path, settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +64,18 @@ def _get_ffprobe_path() -> str:
     return str(ffmpeg_path.parent / ffmpeg_path.name.replace("ffmpeg", "ffprobe"))
 
 
+def _account_config(account: str) -> dict:
+    return ACCOUNTS.get(account, {})
+
+
+def _apply_horror_filter(account: str) -> bool:
+    return bool(_account_config(account).get("apply_horror_filter", False))
+
+
 def _get_random_music(account: str) -> str | None:
     """Pick a random royalty-free music track for the account."""
-    music_dir = Path(settings.db_path).parent.parent / "music" / "royalty_free" / account
+    configured_dir = _account_config(account).get("music_dir")
+    music_dir = Path(resolve_project_path(configured_dir)) if configured_dir else BASE_DIR / "music" / "royalty_free" / account
     if not music_dir.exists():
         return None
 
@@ -142,17 +151,17 @@ def _build_ken_burns_filter(image_index: int, w: int, h: int, duration: float) -
 
     if zoom_in:
         zoom_start = 1.0
-        zoom_end = random.uniform(1.08, 1.15)
+        zoom_end = random.uniform(1.08, max(1.08, settings.ken_burns_max_zoom))
     else:
-        zoom_start = random.uniform(1.08, 1.15)
+        zoom_start = random.uniform(1.08, max(1.08, settings.ken_burns_max_zoom))
         zoom_end = 1.0
 
-    fps = 30
-    total_frames = int(duration * fps)
+    fps = max(1, settings.video_fps)
+    total_frames = max(1, int(duration * fps))
 
     z_expr = f"{zoom_start}+({zoom_end}-{zoom_start})*on/{total_frames}"
 
-    max_pan = _PAN_PIXELS
+    max_pan = max(0, settings.ken_burns_max_pan_pixels)
     cx = "iw/2-(iw/zoom/2)"
     cy = "ih/2-(ih/zoom/2)"
     t = f"on/{total_frames}"
@@ -223,8 +232,8 @@ def _build_subtitle_style() -> str:
         f"FontName={settings.subtitle_font_name},"
         f"FontSize={font_size},"
         "Bold=1,"
-        "PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00101010,"
+        f"PrimaryColour={settings.subtitle_primary_color},"
+        f"OutlineColour={settings.subtitle_outline_color},"
         "BackColour=&H00000000,"
         "BorderStyle=1,"
         f"Outline={outline},"
@@ -248,7 +257,7 @@ def compose_video(
 
     Each image is unique and shown once — no looping.
     Duration per image adjusts to fill the narration evenly.
-    Horror filter applied for terror account.
+    Optional account-specific filters are applied from account config.
 
     Returns path to the final composed video.
     """
@@ -271,7 +280,7 @@ def compose_video(
     # Calculate per-image duration that compensates for crossfade time loss.
     # With xfade, total = n * d - (n-1) * xfade.  We need total >= narration.
     # So d = (narration + (n-1) * xfade) / n, plus a small buffer.
-    xfade_duration = 0.3
+    xfade_duration = max(0.0, settings.crossfade_duration)
     n_clips = len(image_paths)
     xfade_loss = (n_clips - 1) * xfade_duration if n_clips > 1 else 0
     image_duration = (narration_duration + xfade_loss + 1.0) / n_clips  # +1s safety buffer
@@ -289,7 +298,7 @@ def compose_video(
 
         kb_filter = _build_ken_burns_filter(i, w, h, image_duration)
 
-        if account == "terror":
+        if _apply_horror_filter(account):
             horror = _build_horror_filter()
             filter_chain = f"{kb_filter},{horror}"
         else:
@@ -383,9 +392,11 @@ def compose_video(
 
     if music_path and Path(music_path).exists():
         inputs.extend(["-i", music_path])
+        narration_volume = max(0.0, settings.narration_volume_boost)
+        music_volume = max(0.0, min(1.0, settings.music_volume_percent / 100.0))
         filter_parts.append(
-            f"[1:a]volume=1.3[narr];"
-            f"[2:a]volume=0.05,atrim=duration={narration_duration},asetpts=PTS-STARTPTS[bgm];"
+            f"[1:a]volume={narration_volume}[narr];"
+            f"[2:a]volume={music_volume},atrim=duration={narration_duration},asetpts=PTS-STARTPTS[bgm];"
             f"[narr][bgm]amix=inputs=2:duration=first:dropout_transition=3[audio]"
         )
         audio_map = "[audio]"

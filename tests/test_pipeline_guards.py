@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 from config.settings import settings
-from pipeline import compositor, script_gen, subtitles, tiktok_publish, video_gen
+from config import settings as settings_module
+from pipeline import compositor, platform_publishers, script_gen, subtitles, tiktok_publish, video_gen
 
 
 class _Word:
@@ -152,3 +153,59 @@ def test_generate_video_creates_emergency_frame_when_no_reuse_exists(monkeypatch
 
     assert len(result) == 1
     assert Path(result[0]).read_bytes() == b"emergency"
+
+
+def test_platform_registry_includes_instagram_disabled_by_default():
+    registry = settings_module.load_platform_registry()
+    platforms = settings_module.load_platform_config()
+
+    assert "instagram" in registry
+    assert registry["instagram"]["publisher"] == "webhook"
+    assert platforms["terror"]["instagram"] is False
+
+
+def test_platform_file_toggles_override_account_defaults(monkeypatch):
+    monkeypatch.setitem(settings_module.ACCOUNTS, "tech", {
+        "platforms": {"instagram": True},
+    })
+
+    normalized = settings_module._normalize_platform_config({
+        "tech": {"instagram": False},
+    })
+
+    assert normalized["tech"]["instagram"] is False
+
+
+def test_convention_paths_work_for_custom_account_ids():
+    assert Path(settings.get_youtube_token_path("tech")).name == "youtube_tech_token.json"
+    assert Path(settings.get_gmail_token_path("tech")).name == "gmail_tech_token.json"
+    assert Path(settings.get_cookies_path("tech")).name == "tech_cookies.txt"
+
+
+def test_custom_account_script_limits_are_configurable(monkeypatch):
+    monkeypatch.setitem(script_gen.ACCOUNTS, "tech", {
+        "min_words": 70,
+        "max_words": 210,
+        "duration_min_seconds": 25,
+        "duration_max_seconds": 75,
+        "hook_min_words": 4,
+        "hook_max_words": 12,
+    })
+
+    assert script_gen._word_limits_for("tech") == (70, 210)
+    assert script_gen._duration_limits_for("tech") == (25, 75)
+    assert script_gen._hook_word_limits_for("tech") == (4, 12)
+
+
+def test_instagram_without_webhook_is_skipped():
+    result = asyncio.run(platform_publishers.publish_to_platform(
+        "instagram",
+        "missing.mp4",
+        "Titulo",
+        "terror",
+        hashtags=["#test"],
+    ))
+
+    assert result.skipped is True
+    assert result.status == "skipped"
+    assert result.ok is False

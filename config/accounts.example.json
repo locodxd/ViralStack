@@ -1,0 +1,33 @@
+[
+  {
+    "id": "tech",
+    "display_name": "Tech News",
+    "description": "Short daily technology and AI news",
+    "voice": "kore",
+    "voice_fallback": "en-US-GuyNeural",
+    "music_mood": "motivational",
+    "videos_per_day": 1,
+    "quality_threshold": 6.5,
+    "min_words": 80,
+    "max_words": 220,
+    "hook_min_words": 5,
+    "hook_max_words": 14,
+    "youtube_category_id": "28",
+    "hashtags_tiktok": ["#tech", "#ai", "#news", "#fyp"],
+    "hashtags_youtube": ["#tech", "#ai", "#shorts", "#news"],
+    "hashtags_instagram": ["#tech", "#ai", "#reels", "#news"],
+    "image_style": "Clean futuristic tech newsroom, cinematic lighting, photorealistic, vertical 9:16 composition",
+    "image_style_fallback": "Modern technology scene, clean futuristic composition, photorealistic, vertical 9:16",
+    "emergency_color": "0x10202A",
+    "apply_horror_filter": false,
+    "youtube_token_path": "config/youtube_tech_token.json",
+    "tiktok_cookies_path": "storage/cookies/tech_cookies.txt",
+    "gmail_token_path": "config/gmail_tech_token.json",
+    "prompt_file": "config/prompts/tech.yaml",
+    "platforms": {
+      "tiktok": true,
+      "youtube": true,
+      "instagram": false
+    }
+  }
+]
